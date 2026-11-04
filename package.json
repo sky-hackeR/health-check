@@ -1,0 +1,27 @@
+{
+  "name": "goswifthr-intelligence",
+  "version": "1.0.0",
+  "description": "Production HR assessment, calculator and lead generation platform for GoSwiftHR",
+  "private": true,
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run start:dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "build:backend": "npm --prefix backend run build",
+    "build": "npm run build:backend && npm run build:frontend",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "prisma:generate": "npm --prefix backend run prisma:generate",
+    "prisma:migrate": "npm --prefix backend run prisma:migrate",
+    "prisma:studio": "npm --prefix backend run prisma:studio"
+  },
+  "keywords": [
+    "goswifthr",
+    "hr-assessment",
+    "workforce-calculator",
+    "lead-generation"
+  ],
+  "author": "GoSwiftHR Engineering",
+  "license": "UNLICENSED"
+}

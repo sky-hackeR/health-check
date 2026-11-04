@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@theme {
+  /* GoSwiftHR Official Brand Identity (Directly extracted from goswifthr.com) */
+  --color-goswift-primary: #5157FB;
+  --color-goswift-primary-hover: #4243DA;
+  --color-goswift-primary-light: #6878FF;
+  --color-goswift-primary-soft: #EEF0FF;
+
+  --color-goswift-accent: #3ECFD2;
+  --color-goswift-accent-dark: #00B9BC;
+  --color-goswift-accent-soft: #E0F9F9;
+
+  --color-goswift-brand-blue: #5157FB;
+  --color-goswift-brand-indigo: #4338CA;
+  --color-goswift-brand-hover: #4243DA;
+
+  /* Deep Midnight & Obsidian Dark Theme (goswifthr.com) */
+  --color-goswift-dark-bg: #080A15;
+  --color-goswift-dark-surface: #0F1424;
+  --color-goswift-dark-card: #141725;
+  --color-goswift-dark-border: #1E2438;
+
+  /* Light Theme Canvas & Typography */
+  --color-goswift-navy: #0A0F1D;
+  --color-goswift-navy-dark: #080A15;
+  --color-goswift-navy-light: #1A2138;
+
+  --color-goswift-grey-light: #F8F9FD;
+  --color-goswift-grey-muted: #E2E8F0;
+  --color-goswift-grey-subtle: #64748B;
+
+  /* Aliasing legacy teal/mint tokens to the authentic GoSwiftHR Royal Indigo & Obsidian palette */
+  --color-goswift-teal: #5157FB;
+  --color-goswift-teal-dark: #0B0F19;
+  --color-goswift-teal-light: #6878FF;
+
+  --color-goswift-mint: #5157FB;
+  --color-goswift-mint-hover: #4243DA;
+  --color-goswift-mint-soft: #EEF0FF;
+}
+
+:root {
+  --background: #F8F9FD;
+  --foreground: #0A0F1D;
+  --card-bg: #FFFFFF;
+  --card-border: #E2E8F0;
+  --sidebar-bg: #0B0F19;
+  --brand-primary: #5157FB;
+  --brand-accent: #3ECFD2;
+}
+
+[data-theme="dark"],
+.dark {
+  --background: #080A15;
+  --foreground: #F8F9FD;
+  --card-bg: #0F1424;
+  --card-border: #1E2438;
+  --sidebar-bg: #070913;
+  --brand-primary: #6878FF;
+  --brand-accent: #3ECFD2;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+}

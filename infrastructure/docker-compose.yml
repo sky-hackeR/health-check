@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: goswifthr-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-goswift_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-goswift_dev_pass_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-goswifthr_intelligence}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-goswift_admin} -d ${POSTGRES_DB:-goswifthr_intelligence}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - goswift-net
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  goswift-net:
+    driver: bridge

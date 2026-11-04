@@ -1,0 +1,603 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==============================================================================
+// ENUMS
+// ==============================================================================
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  UNQUALIFIED
+  CONVERTED
+}
+
+enum LeadQualificationTier {
+  UNGRADED
+  HOT
+  WARM
+  COLD
+}
+
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  NUMERIC_INPUT
+  SLIDER
+  BOOLEAN
+}
+
+enum AssessmentStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+}
+
+enum RecommendationPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum RecommendationStatus {
+  PROPOSED
+  ACCEPTED
+  REJECTED
+  IMPLEMENTED
+}
+
+enum WalkthroughStatus {
+  PENDING
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+enum LeadActivityType {
+  CREATED
+  ASSESSMENT_COMPLETED
+  WALKTHROUGH_REQUESTED
+  EMAIL_DISPATCHED
+  STATUS_CHANGED
+  NOTE_ADDED
+}
+
+enum NotificationChannel {
+  EMAIL
+  SLACK
+  IN_APP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// ==============================================================================
+// 1. ACCESS CONTROL & ADMINISTRATION
+// ==============================================================================
+
+model AdminUser {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  isActive     Boolean    @default(true)
+  lastLoginAt  DateTime?
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  auditLogs    AuditLog[]
+  deletedAt    DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([roleId])
+  @@index([deletedAt])
+  @@map("admin_users")
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  description String?
+  isSystem    Boolean          @default(false)
+  users       AdminUser[]
+  permissions RolePermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  slug        String           @unique
+  name        String
+  module      String
+  description String?
+  roles       RolePermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  assignedAt   DateTime   @default(now())
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+// ==============================================================================
+// 2. ORGANIZATIONS & LEAD MANAGEMENT
+// ==============================================================================
+
+model Company {
+  id             String    @id @default(uuid())
+  name           String
+  normalizedName String    @unique // Canonical name format (e.g. lowercase trimmed) to prevent duplicate records
+  domain         String?   // Corporate domain (e.g. acme.com)
+  industry       String?
+  headcountRange String?   // e.g. "1-20", "21-50", "51-200", "201-1000", "1000+"
+  country        String?
+  city           String?
+  website        String?
+  leads          Lead[]
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([domain])
+  @@index([deletedAt])
+  @@map("companies")
+}
+
+model Lead {
+  id                  String                @id @default(uuid())
+  companyId           String?
+  company             Company?              @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  email               String                @unique
+  firstName           String?
+  lastName            String?
+  jobTitle            String?
+  phone               String?
+  status              LeadStatus            @default(NEW)
+  qualificationTier   LeadQualificationTier @default(UNGRADED)
+  
+  // Consent & Compliance Records
+  consentGdpr         Boolean               @default(false)
+  consentMarketing    Boolean               @default(false)
+  consentAt           DateTime?
+  consentIp           String?
+
+  assessments         Assessment[]
+  activities          LeadActivity[]
+  walkthroughRequests WalkthroughRequest[]
+  trackingEvents      TrackingEvent[]
+
+  deletedAt           DateTime?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  @@index([companyId])
+  @@index([status])
+  @@index([qualificationTier])
+  @@index([deletedAt])
+  @@map("leads")
+}
+
+// ==============================================================================
+// 3. CALCULATORS & VERSIONING ENGINE
+// ==============================================================================
+
+model Calculator {
+  id          String              @id @default(uuid())
+  slug        String              @unique // e.g. "hr-maturity-index", "turnover-retention-calculator"
+  name        String
+  description String?
+  isActive    Boolean             @default(true)
+  versions    CalculatorVersion[]
+  deletedAt   DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([deletedAt])
+  @@map("calculators")
+}
+
+model CalculatorVersion {
+  id                  String               @id @default(uuid())
+  calculatorId        String
+  calculator          Calculator           @relation(fields: [calculatorId], references: [id], onDelete: Cascade)
+  versionNumber       Int                  @default(1)
+  changelog           String?
+  isPublished         Boolean              @default(false)
+  publishedAt         DateTime?
+  questions           Question[]
+  scoreCategories     ScoreCategory[]
+  scoringRules        ScoringRule[]
+  recommendationRules RecommendationRule[]
+  assessments         Assessment[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  @@unique([calculatorId, versionNumber])
+  @@index([calculatorId])
+  @@map("calculator_versions")
+}
+
+model ScoreCategory {
+  id                  String            @id @default(uuid())
+  calculatorVersionId String
+  calculatorVersion   CalculatorVersion @relation(fields: [calculatorVersionId], references: [id], onDelete: Cascade)
+  code                String            // e.g. "COMPLIANCE", "RETENTION", "TALENT_ACQUISITION"
+  name                String
+  weight              Float             @default(1.0)
+  questions           Question[]
+  scoringRules        ScoringRule[]
+  recommendationRules RecommendationRule[]
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@unique([calculatorVersionId, code])
+  @@index([calculatorVersionId])
+  @@map("score_categories")
+}
+
+model Question {
+  id                  String             @id @default(uuid())
+  calculatorVersionId String
+  calculatorVersion   CalculatorVersion  @relation(fields: [calculatorVersionId], references: [id], onDelete: Cascade)
+  scoreCategoryId     String?
+  scoreCategory       ScoreCategory?     @relation(fields: [scoreCategoryId], references: [id], onDelete: SetNull)
+  code                String             // e.g. "Q1_COMPLIANCE_AUDIT"
+  title               String
+  helpText            String?
+  type                QuestionType       @default(SINGLE_CHOICE)
+  orderIndex          Int                @default(0)
+  weight              Float              @default(1.0)
+  isRequired          Boolean            @default(true)
+  displayConditions   Json?              // Conditional visibility rule tree
+  options             QuestionOption[]
+  answers             AssessmentAnswer[]
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@unique([calculatorVersionId, code])
+  @@index([calculatorVersionId])
+  @@index([scoreCategoryId])
+  @@map("questions")
+}
+
+model QuestionOption {
+  id         String             @id @default(uuid())
+  questionId String
+  question   Question           @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  label      String
+  value      String
+  orderIndex Int                @default(0)
+  scoreValue Float              @default(0.0)
+  metadata   Json?
+  answers    AssessmentAnswer[]
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  @@index([questionId])
+  @@map("question_options")
+}
+
+model ScoringRule {
+  id                  String            @id @default(uuid())
+  calculatorVersionId String
+  calculatorVersion   CalculatorVersion @relation(fields: [calculatorVersionId], references: [id], onDelete: Cascade)
+  scoreCategoryId     String?
+  scoreCategory       ScoreCategory?    @relation(fields: [scoreCategoryId], references: [id], onDelete: SetNull)
+  name                String
+  conditionExpression String            // JSON rule or DSL formula expression
+  multiplier          Float             @default(1.0)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([calculatorVersionId])
+  @@index([scoreCategoryId])
+  @@map("scoring_rules")
+}
+
+// ==============================================================================
+// 4. RECOMMENDATIONS ENGINE
+// ==============================================================================
+
+model RecommendationTemplate {
+  id                        String                     @id @default(uuid())
+  code                      String                     @unique // e.g. "REC_AUTOMATE_ONBOARDING"
+  title                     String
+  summary                   String
+  actionPlan                String
+  priority                  RecommendationPriority     @default(MEDIUM)
+  serviceLink               String?
+  rules                     RecommendationRule[]
+  assessmentRecommendations AssessmentRecommendation[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+
+  @@map("recommendation_templates")
+}
+
+model RecommendationRule {
+  id                        String                     @id @default(uuid())
+  calculatorVersionId       String
+  calculatorVersion         CalculatorVersion          @relation(fields: [calculatorVersionId], references: [id], onDelete: Cascade)
+  templateId                String
+  template                  RecommendationTemplate     @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  scoreCategoryId           String?
+  scoreCategory             ScoreCategory?             @relation(fields: [scoreCategoryId], references: [id], onDelete: SetNull)
+  minScore                  Float?
+  maxScore                  Float?
+  conditionJson             Json?
+  assessmentRecommendations AssessmentRecommendation[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+
+  @@index([calculatorVersionId])
+  @@index([templateId])
+  @@index([scoreCategoryId])
+  @@map("recommendation_rules")
+}
+
+// ==============================================================================
+// 5. ASSESSMENTS, ANSWERS & HISTORICAL IMMUTABLE RESULTS
+// ==============================================================================
+
+model Assessment {
+  id                  String                     @id @default(uuid())
+  sessionToken        String                     @unique // Anonymous session support prior to lead capture
+  calculatorVersionId String
+  calculatorVersion   CalculatorVersion          @relation(fields: [calculatorVersionId], references: [id], onDelete: Restrict)
+  leadId              String?                    // Nullable: allows anonymous exploration before submission
+  lead                Lead?                      @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  status              AssessmentStatus           @default(IN_PROGRESS)
+  startedAt           DateTime                   @default(now())
+  completedAt         DateTime?
+  ipAddress           String?
+  userAgent           String?
+  campaignId          String?
+  campaign            Campaign?                  @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  expiresAt           DateTime?                  // Session expiration timestamp (e.g. 30 days)
+
+  answers             AssessmentAnswer[]
+  result              AssessmentResult?
+  recommendations     AssessmentRecommendation[]
+  trackingEvents      TrackingEvent[]
+
+  deletedAt           DateTime?
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+
+  @@index([calculatorVersionId])
+  @@index([leadId])
+  @@index([campaignId])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("assessments")
+}
+
+model AssessmentAnswer {
+  id               String          @id @default(uuid())
+  assessmentId     String
+  assessment       Assessment      @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  questionId       String
+  question         Question        @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  selectedOptionId String?
+  selectedOption   QuestionOption? @relation(fields: [selectedOptionId], references: [id], onDelete: SetNull)
+  textValue        String?
+  numericValue     Float?
+  rawInput         Json?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@unique([assessmentId, questionId])
+  @@index([assessmentId])
+  @@index([questionId])
+  @@index([selectedOptionId])
+  @@map("assessment_answers")
+}
+
+model AssessmentResult {
+  id                String     @id @default(uuid())
+  assessmentId      String     @unique
+  assessment        Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  overallScore      Float
+  normalizedIndex   Float      // 0.0 - 100.0% index
+  maturityLevel     String     // e.g. "Foundational", "Emerging", "Optimized", "Strategic"
+  categoryScores    Json       // Category breakdown snapshot: { "COMPLIANCE": 80, "RETENTION": 45 }
+  calculatedMetrics Json?      // Concrete ROI metrics: { "annualTurnoverCost": 120000, "projectedSavings": 42000 }
+  summaryHtml       String?
+  isImmutable       Boolean    @default(true)
+  calculatedAt      DateTime   @default(now())
+  createdAt         DateTime   @default(now())
+
+  @@index([assessmentId])
+  @@map("assessment_results")
+}
+
+model AssessmentRecommendation {
+  id           String                 @id @default(uuid())
+  assessmentId String
+  assessment   Assessment             @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  templateId   String
+  template     RecommendationTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  ruleId       String?
+  rule         RecommendationRule?    @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  
+  // Historical snapshot preserved at recommendation generation time
+  title        String
+  summary      String
+  actionPlan   String
+  priority     RecommendationPriority
+  status       RecommendationStatus   @default(PROPOSED)
+  createdAt    DateTime               @default(now())
+
+  @@index([assessmentId])
+  @@index([templateId])
+  @@index([ruleId])
+  @@map("assessment_recommendations")
+}
+
+// ==============================================================================
+// 6. TRACKING, GEO-LOCATION, CAMPAIGNS & ENGAGEMENT
+// ==============================================================================
+
+model GeoLocation {
+  id             String          @id @default(uuid())
+  ipAddress      String
+  countryCode    String?
+  countryName    String?
+  region         String?
+  city           String?
+  postalCode     String?
+  latitude       Float?
+  longitude      Float?
+  trackingEvents TrackingEvent[]
+  createdAt      DateTime        @default(now())
+
+  @@index([ipAddress])
+  @@map("geo_locations")
+}
+
+model Campaign {
+  id           String         @id @default(uuid())
+  code         String         @unique // e.g. "LINKEDIN_Q4_HR_AUDIT", "GOOGLE_SEARCH_TURNOVER"
+  name         String
+  source       String?        // utm_source
+  medium       String?        // utm_medium
+  term         String?        // utm_term
+  content      String?        // utm_content
+  assessments  Assessment[]
+  leadActivity LeadActivity[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@map("campaigns")
+}
+
+model TrackingEvent {
+  id            String       @id @default(uuid())
+  visitorToken  String       // Independent tracking token
+  eventType     String       // e.g. "PAGE_VIEW", "CALCULATOR_STARTED", "LEAD_FORM_SUBMITTED"
+  leadId        String?      // Nullable: independent of lead creation
+  lead          Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  assessmentId  String?      // Nullable: tracking may happen before or outside assessment
+  assessment    Assessment?  @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
+  pageUrl       String?
+  metadata      Json?
+  geoLocationId String?
+  geoLocation   GeoLocation? @relation(fields: [geoLocationId], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now())
+
+  @@index([visitorToken])
+  @@index([eventType])
+  @@index([leadId])
+  @@index([assessmentId])
+  @@index([geoLocationId])
+  @@map("tracking_events")
+}
+
+model WalkthroughRequest {
+  id            String            @id @default(uuid())
+  leadId        String
+  lead          Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  preferredDate DateTime?
+  notes         String?
+  status        WalkthroughStatus @default(PENDING)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([leadId])
+  @@index([status])
+  @@map("walkthrough_requests")
+}
+
+model LeadActivity {
+  id          String           @id @default(uuid())
+  leadId      String
+  lead        Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type        LeadActivityType
+  description String
+  metadata    Json?
+  campaignId  String?
+  campaign    Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  createdAt   DateTime         @default(now())
+
+  @@index([leadId])
+  @@index([type])
+  @@index([campaignId])
+  @@map("lead_activities")
+}
+
+// ==============================================================================
+// 7. AUDITING, LOGGING & NOTIFICATIONS
+// ==============================================================================
+
+model IntegrationLog {
+  id              String   @id @default(uuid())
+  serviceName     String   // e.g. "HUBSPOT", "SENDGRID", "SLACK", "WEBHOOK"
+  direction       String   // "OUTBOUND" | "INBOUND"
+  endpoint        String?
+  status          String   // "SUCCESS" | "FAILED" | "PENDING"
+  requestPayload  Json?
+  responsePayload Json?
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+
+  @@index([serviceName])
+  @@index([status])
+  @@map("integration_logs")
+}
+
+model AuditLog {
+  id          String     @id @default(uuid())
+  adminUserId String?
+  adminUser   AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
+  action      String     // e.g. "ADMIN_LOGIN", "UPDATE_CALCULATOR_VERSION", "EXPORT_LEADS"
+  resource    String
+  resourceId  String?
+  ipAddress   String?
+  diff        Json?
+  createdAt   DateTime   @default(now())
+
+  @@index([adminUserId])
+  @@index([resource])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String              @id @default(uuid())
+  recipient String              // Destination address or user identifier
+  channel   NotificationChannel @default(EMAIL)
+  subject   String
+  content   String
+  status    NotificationStatus  @default(PENDING)
+  metadata  Json?
+  sentAt    DateTime?
+  createdAt DateTime            @default(now())
+
+  @@index([recipient])
+  @@index([status])
+  @@map("notifications")
+}

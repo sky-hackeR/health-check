@@ -1,0 +1,4 @@
+# Root convenience compose file for GoSwiftHR Intelligence local development
+# You can run: docker compose up -d
+include:
+  - infrastructure/docker-compose.yml
