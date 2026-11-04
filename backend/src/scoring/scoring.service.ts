@@ -140,13 +140,8 @@ export class ScoringService {
       let percentage =
         rawMaxPossible > 0 ? (rawEarned / rawMaxPossible) * 100 : 0;
 
-      // Apply any category-level scoring rules
       const applicableRules = scoringRules.filter((r) => r.scoreCategoryId === cat.id);
-      for (const rule of applicableRules) {
-        if (this.evaluateScoringRuleCondition(rule.conditionExpression, percentage, answers)) {
-          percentage *= rule.multiplier;
-        }
-      }
+      percentage = this.applyScoringRules(percentage, applicableRules, answers);
 
       // Bound between 0.0 and 100.0, rounded to 1 decimal place
       const normalizedCategoryScore = Math.max(0, Math.min(100, Math.round(percentage * 10) / 10));
@@ -183,13 +178,8 @@ export class ScoringService {
     let overallPercentage =
       totalWeight > 0 ? totalWeightedScore / totalWeight : 0;
 
-    // Apply global scoring rules (where scoreCategoryId is null)
     const globalRules = scoringRules.filter((r) => !r.scoreCategoryId);
-    for (const rule of globalRules) {
-      if (this.evaluateScoringRuleCondition(rule.conditionExpression, overallPercentage, answers)) {
-        overallPercentage *= rule.multiplier;
-      }
-    }
+    overallPercentage = this.applyScoringRules(overallPercentage, globalRules, answers);
 
     const normalizedIndex = Math.max(0, Math.min(100, Math.round(overallPercentage * 10) / 10));
     const maturityLevel = this.determineMaturityLevel(normalizedIndex);
@@ -231,9 +221,7 @@ export class ScoringService {
       question.type === QuestionType.SINGLE_CHOICE ||
       question.type === QuestionType.BOOLEAN
     ) {
-      if (!question.options || question.options.length === 0) return 100;
-      const maxVal = Math.max(...question.options.map((o) => o.scoreValue || 0));
-      return maxVal > 0 ? maxVal : 100;
+      return 100;
     }
 
     if (
@@ -248,6 +236,28 @@ export class ScoringService {
     }
 
     return 100;
+  }
+
+  private applyScoringRules(
+    baseScore: number,
+    rules: ScoringRuleInput[],
+    answers: AnswerSnapshot[],
+  ): number {
+    let adjustedScore = baseScore;
+
+    for (const rule of rules) {
+      if (!Number.isFinite(rule.multiplier) || rule.multiplier < 0) {
+        throw new Error(
+          `Scoring rule "${rule.name}" must have a finite, non-negative multiplier.`,
+        );
+      }
+
+      if (this.evaluateScoringRuleCondition(rule.conditionExpression, baseScore, answers)) {
+        adjustedScore *= rule.multiplier;
+      }
+    }
+
+    return adjustedScore;
   }
 
   /**

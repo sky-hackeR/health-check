@@ -25,6 +25,10 @@ import {
   SaveAnswersResponseDto,
   CompleteAssessmentResponseDto,
 } from './dto/assessment-response.dto';
+import {
+  AssessmentRecommendationItemDto,
+  AssessmentResultResponseDto,
+} from './dto/assessment-result-response.dto';
 
 @ApiTags('Public - Assessment Engine & Calculators')
 @Controller()
@@ -139,12 +143,78 @@ export class AssessmentsController {
     return this.assessmentsService.saveAnswers(sessionToken, dto);
   }
 
+  @Get('assessments/:sessionToken/result')
+  @ApiOperation({
+    summary: 'Retrieve a completed assessment result',
+    description:
+      'Uses the 64-character assessment session token as a bearer capability. Results are available only after completion.',
+  })
+  @ApiParam({
+    name: 'sessionToken',
+    description: '64-character session token returned from startAssessment',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Immutable assessment result returned successfully',
+    type: AssessmentResultResponseDto,
+  })
+  @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description: 'Assessment is not complete',
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Assessment or result was not found',
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: 'Assessment session has expired',
+  })
+  async getAssessmentResult(
+    @Param('sessionToken') sessionToken: string,
+  ): Promise<AssessmentResultResponseDto> {
+    return this.assessmentsService.getAssessmentResult(sessionToken);
+  }
+
+  @Get('assessments/:sessionToken/recommendations')
+  @ApiOperation({
+    summary: 'Retrieve recommendations for a completed assessment',
+    description:
+      'Uses the 64-character assessment session token as a bearer capability. Only recommendation snapshots generated for that assessment are returned.',
+  })
+  @ApiParam({
+    name: 'sessionToken',
+    description: '64-character session token returned from startAssessment',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'Assessment recommendations returned successfully',
+    type: [AssessmentRecommendationItemDto],
+  })
+  @ApiResponse({
+    status: HttpStatus.BAD_REQUEST,
+    description: 'Assessment is not complete',
+  })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Assessment or result was not found',
+  })
+  @ApiResponse({
+    status: HttpStatus.UNAUTHORIZED,
+    description: 'Assessment session has expired',
+  })
+  async getAssessmentRecommendations(
+    @Param('sessionToken') sessionToken: string,
+  ): Promise<AssessmentRecommendationItemDto[]> {
+    return this.assessmentsService.getAssessmentRecommendations(sessionToken);
+  }
+
   @Post('assessments/:sessionToken/complete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Complete assessment session',
     description:
-      'Validates that all visible required questions have answers and marks the assessment status as COMPLETED. Prepared for scoring and lead capture pipelines.',
+      'Validates required answers, marks the assessment complete, and atomically persists its immutable score and recommendation snapshots.',
   })
   @ApiParam({
     name: 'sessionToken',

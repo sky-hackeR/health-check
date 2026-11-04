@@ -58,6 +58,60 @@ describe('ScoringService (Deterministic Scoring Engine)', () => {
     expect(result.benchmarkComparison.variance).toBe(25.5); // 90 - 64.5
   });
 
+  it('should normalize choice scores against the 100-point scale at minimum, intermediate, and maximum values', () => {
+    const calculateScore = (scoreValue: number) =>
+      service.calculateScores({
+        calculatorSlug: 'score-boundaries',
+        categories: [{ id: 'cat-1', code: 'CATEGORY', name: 'Category', weight: 1 }],
+        questions: [
+          {
+            id: 'q1',
+            code: 'Q1',
+            title: 'Scored question',
+            type: QuestionType.SINGLE_CHOICE,
+            weight: 1,
+            isRequired: true,
+            scoreCategoryId: 'cat-1',
+            options: [{ id: 'opt-1', value: 'answer', scoreValue }],
+          },
+        ],
+        answers: [
+          { questionId: 'q1', questionCode: 'Q1', selectedOptionId: 'opt-1' },
+        ],
+      });
+
+    expect(calculateScore(0).categoryScores['CATEGORY'].percentage).toBe(0);
+    expect(calculateScore(50).categoryScores['CATEGORY'].percentage).toBe(50);
+    expect(calculateScore(100).categoryScores['CATEGORY'].percentage).toBe(100);
+  });
+
+  it('should include unanswered visible questions in the denominator as zero points', () => {
+    const result = service.calculateScores({
+      calculatorSlug: 'unanswered-test',
+      categories: [{ id: 'cat-1', code: 'CATEGORY', name: 'Category', weight: 1 }],
+      questions: [
+        {
+          id: 'q1',
+          code: 'Q1',
+          title: 'Unanswered question',
+          type: QuestionType.SINGLE_CHOICE,
+          weight: 1,
+          isRequired: true,
+          scoreCategoryId: 'cat-1',
+          options: [{ id: 'opt-1', value: 'answer', scoreValue: 100 }],
+        },
+      ],
+      answers: [],
+    });
+
+    expect(result.categoryScores['CATEGORY'].maxPossibleScore).toBe(100);
+    expect(result.categoryScores['CATEGORY'].rawScore).toBe(0);
+    expect(result.categoryScores['CATEGORY'].percentage).toBe(0);
+    expect(result.categoryScores['CATEGORY'].answeredQuestionsCount).toBe(0);
+    expect(result.categoryScores['CATEGORY'].visibleQuestionsCount).toBe(1);
+    expect(result.overallScore).toBe(0);
+  });
+
   it('should safeguard against division by zero when a category has zero questions or zero weight', () => {
     const result = service.calculateScores({
       calculatorSlug: 'empty-test',
@@ -126,6 +180,115 @@ describe('ScoringService (Deterministic Scoring Engine)', () => {
     expect(result.categoryScores['COMPLIANCE'].visibleQuestionsCount).toBe(1);
   });
 
+  it('should include unanswered conditional questions only when they are visible', () => {
+    const baseInput = {
+      calculatorSlug: 'conditional-test',
+      categories: [{ id: 'cat-1', code: 'CATEGORY', name: 'Category', weight: 1 }],
+      questions: [
+        {
+          id: 'q1',
+          code: 'Q1',
+          title: 'Parent question',
+          type: QuestionType.SINGLE_CHOICE,
+          weight: 1,
+          isRequired: true,
+          scoreCategoryId: 'cat-1',
+          options: [
+            { id: 'parent-yes', value: 'yes', scoreValue: 100 },
+            { id: 'parent-no', value: 'no', scoreValue: 0 },
+          ],
+        },
+        {
+          id: 'q2',
+          code: 'Q2',
+          title: 'Conditional question',
+          type: QuestionType.SINGLE_CHOICE,
+          weight: 1,
+          isRequired: false,
+          scoreCategoryId: 'cat-1',
+          displayConditions: {
+            questionCode: 'Q1',
+            operator: 'EQUALS' as const,
+            value: 'yes',
+          },
+          options: [{ id: 'child-yes', value: 'yes', scoreValue: 100 }],
+        },
+      ],
+    };
+
+    const visibleResult = service.calculateScores({
+      ...baseInput,
+      answers: [
+        {
+          questionId: 'q1',
+          questionCode: 'Q1',
+          selectedOptionId: 'parent-yes',
+          selectedOptionValue: 'yes',
+        },
+      ],
+    });
+    expect(visibleResult.categoryScores['CATEGORY'].maxPossibleScore).toBe(200);
+    expect(visibleResult.categoryScores['CATEGORY'].rawScore).toBe(100);
+    expect(visibleResult.categoryScores['CATEGORY'].percentage).toBe(50);
+    expect(visibleResult.categoryScores['CATEGORY'].visibleQuestionsCount).toBe(2);
+    expect(visibleResult.categoryScores['CATEGORY'].answeredQuestionsCount).toBe(1);
+
+    const hiddenResult = service.calculateScores({
+      ...baseInput,
+      answers: [
+        {
+          questionId: 'q1',
+          questionCode: 'Q1',
+          selectedOptionId: 'parent-no',
+          selectedOptionValue: 'no',
+        },
+      ],
+    });
+    expect(hiddenResult.categoryScores['CATEGORY'].maxPossibleScore).toBe(100);
+    expect(hiddenResult.categoryScores['CATEGORY'].percentage).toBe(0);
+    expect(hiddenResult.categoryScores['CATEGORY'].visibleQuestionsCount).toBe(1);
+  });
+
+  it('should combine category percentages using configured category weights', () => {
+    const result = service.calculateScores({
+      calculatorSlug: 'weighted-categories',
+      categories: [
+        { id: 'cat-1', code: 'WEIGHTED', name: 'Weighted', weight: 3 },
+        { id: 'cat-2', code: 'UNWEIGHTED', name: 'Unweighted', weight: 1 },
+      ],
+      questions: [
+        {
+          id: 'q1',
+          code: 'Q1',
+          title: 'Weighted category question',
+          type: QuestionType.SINGLE_CHOICE,
+          weight: 1,
+          isRequired: true,
+          scoreCategoryId: 'cat-1',
+          options: [{ id: 'opt-1', value: 'yes', scoreValue: 100 }],
+        },
+        {
+          id: 'q2',
+          code: 'Q2',
+          title: 'Unweighted category question',
+          type: QuestionType.SINGLE_CHOICE,
+          weight: 1,
+          isRequired: true,
+          scoreCategoryId: 'cat-2',
+          options: [{ id: 'opt-2', value: 'no', scoreValue: 0 }],
+        },
+      ],
+      answers: [
+        { questionId: 'q1', questionCode: 'Q1', selectedOptionId: 'opt-1' },
+        { questionId: 'q2', questionCode: 'Q2', selectedOptionId: 'opt-2' },
+      ],
+    });
+
+    expect(result.categoryScores['WEIGHTED'].percentage).toBe(100);
+    expect(result.categoryScores['UNWEIGHTED'].percentage).toBe(0);
+    expect(result.overallScore).toBe(75);
+  });
+
   it('should correctly classify maturity levels and risk bands', () => {
     expect(service.determineMaturityLevel(25)).toBe('Foundational');
     expect(service.determineRiskLevel(25)).toBe('CRITICAL');
@@ -176,4 +339,96 @@ describe('ScoringService (Deterministic Scoring Engine)', () => {
 
     expect(result.categoryScores['COMPLIANCE'].percentage).toBe(40);
   });
+
+  it('should not apply a multiplier when its condition does not match the base score', () => {
+    const result = service.calculateScores({
+      calculatorSlug: 'hr-health-check',
+      categories: [{ id: 'cat-1', code: 'COMPLIANCE', name: 'Compliance', weight: 1 }],
+      questions: [
+        {
+          id: 'q1',
+          code: 'Q1',
+          title: 'Compliance audit',
+          type: QuestionType.SINGLE_CHOICE,
+          weight: 1,
+          isRequired: true,
+          scoreCategoryId: 'cat-1',
+          options: [{ id: 'opt-1', value: 'yes', scoreValue: 80 }],
+        },
+      ],
+      scoringRules: [
+        {
+          id: 'rule-1',
+          name: 'Low score penalty',
+          scoreCategoryId: 'cat-1',
+          conditionExpression: 'SCORE <= 50',
+          multiplier: 0.8,
+        },
+      ],
+      answers: [{ questionId: 'q1', questionCode: 'Q1', selectedOptionId: 'opt-1' }],
+    });
+
+    expect(result.categoryScores['COMPLIANCE'].percentage).toBe(80);
+  });
+
+  it('should evaluate every multiplier condition against the same unadjusted score', () => {
+    const result = service.calculateScores({
+      calculatorSlug: 'hr-health-check',
+      categories: [{ id: 'cat-1', code: 'COMPLIANCE', name: 'Compliance', weight: 1 }],
+      questions: [
+        {
+          id: 'q1',
+          code: 'Q1',
+          title: 'Compliance audit',
+          type: QuestionType.SINGLE_CHOICE,
+          weight: 1,
+          isRequired: true,
+          scoreCategoryId: 'cat-1',
+          options: [{ id: 'opt-1', value: 'yes', scoreValue: 50 }],
+        },
+      ],
+      scoringRules: [
+        {
+          id: 'rule-1',
+          name: 'First penalty',
+          scoreCategoryId: 'cat-1',
+          conditionExpression: 'SCORE <= 50',
+          multiplier: 0.5,
+        },
+        {
+          id: 'rule-2',
+          name: 'Second penalty',
+          scoreCategoryId: 'cat-1',
+          conditionExpression: 'SCORE <= 30',
+          multiplier: 0.5,
+        },
+      ],
+      answers: [{ questionId: 'q1', questionCode: 'Q1', selectedOptionId: 'opt-1' }],
+    });
+
+    expect(result.categoryScores['COMPLIANCE'].percentage).toBe(25);
+  });
+
+  it.each([-0.1, Number.NaN, Number.POSITIVE_INFINITY])(
+    'should reject invalid scoring-rule multipliers (%s)',
+    (multiplier) => {
+      expect(() =>
+        service.calculateScores({
+          calculatorSlug: 'hr-health-check',
+          categories: [{ id: 'cat-1', code: 'COMPLIANCE', name: 'Compliance', weight: 1 }],
+          questions: [],
+          scoringRules: [
+            {
+              id: 'rule-1',
+              name: 'Invalid rule',
+              scoreCategoryId: 'cat-1',
+              conditionExpression: 'SCORE <= 50',
+              multiplier,
+            },
+          ],
+          answers: [],
+        }),
+      ).toThrow('finite, non-negative multiplier');
+    },
+  );
 });

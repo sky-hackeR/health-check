@@ -4,9 +4,11 @@ import {
   BadRequestException,
   UnauthorizedException,
   Logger,
+  ConflictException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AssessmentStatus, QuestionType } from '@prisma/client';
+import { AssessmentStatus, Prisma, QuestionType } from '@prisma/client';
 import * as crypto from 'crypto';
 import { StartAssessmentDto } from './dto/start-assessment.dto';
 import { SaveAnswersDto } from './dto/save-answers.dto';
@@ -24,10 +26,91 @@ import { ConditionEvaluator, AnswerSnapshot } from './condition-evaluator';
 import { ScoringService } from '../scoring/scoring.service';
 import { RecommendationService } from '../recommendations/recommendation.service';
 import {
+  BenchmarkComparisonDto,
+  CategoryScoreDetailDto,
   AssessmentResultResponseDto,
   AssessmentRecommendationItemDto,
   AssessmentFullResultResponseDto,
 } from './dto/assessment-result-response.dto';
+
+type AssessmentResultRecord = Prisma.AssessmentResultGetPayload<object>;
+type AssessmentRecommendationRecord = Prisma.AssessmentRecommendationGetPayload<{
+  include: { template: true };
+}>;
+
+function toPrismaJsonValue(value: unknown): Prisma.InputJsonValue {
+  const ancestors = new WeakSet<object>();
+
+  const convert = (
+    current: unknown,
+    path: string,
+  ): Prisma.InputJsonValue | null | undefined => {
+    if (
+      current === null ||
+      typeof current === 'string' ||
+      typeof current === 'boolean'
+    ) {
+      return current;
+    }
+
+    if (typeof current === 'number') {
+      if (!Number.isFinite(current)) {
+        throw new TypeError(`Non-finite number at ${path} cannot be stored as JSON.`);
+      }
+      return current;
+    }
+
+    if (current === undefined) {
+      return undefined;
+    }
+
+    if (typeof current !== 'object') {
+      throw new TypeError(`Unsupported JSON value at ${path}.`);
+    }
+
+    if (ancestors.has(current)) {
+      throw new TypeError(`Circular value at ${path} cannot be stored as JSON.`);
+    }
+
+    ancestors.add(current);
+    try {
+      if (Array.isArray(current)) {
+        return Array.from(current, (item, index) => {
+          const converted = convert(item, `${path}[${index}]`);
+          return converted === undefined ? null : converted;
+        });
+      }
+
+      const prototype = Object.getPrototypeOf(current);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError(`Unsupported object at ${path}; expected a plain JSON object.`);
+      }
+
+      if (Reflect.ownKeys(current).some((key) => typeof key === 'symbol')) {
+        throw new TypeError(`Symbol keys at ${path} cannot be stored as JSON.`);
+      }
+
+      const converted: {
+        [key: string]: Prisma.InputJsonValue | null | undefined;
+      } = {};
+      for (const [key, nestedValue] of Object.entries(current)) {
+        const convertedValue = convert(nestedValue, `${path}.${key}`);
+        if (convertedValue !== undefined) {
+          converted[key] = convertedValue;
+        }
+      }
+      return converted;
+    } finally {
+      ancestors.delete(current);
+    }
+  };
+
+  const converted = convert(value, 'calculatedMetrics');
+  if (converted === null || converted === undefined) {
+    throw new TypeError('calculatedMetrics must be a non-null JSON value.');
+  }
+  return converted;
+}
 
 @Injectable()
 export class AssessmentsService {
@@ -376,10 +459,23 @@ export class AssessmentsService {
       }
     }
 
-    // Upsert answers idempotently in a transaction
-    await this.prisma.$transaction(
-      dto.answers.map((ans) =>
-        this.prisma.assessmentAnswer.upsert({
+    // Lock the assessment row before writes so completion and answer saves serialize.
+    await this.prisma.$transaction(async (tx) => {
+      const writableAssessment = await tx.assessment.updateMany({
+        where: {
+          id: assessment.id,
+          status: AssessmentStatus.IN_PROGRESS,
+        },
+        data: { updatedAt: new Date() },
+      });
+      if (writableAssessment.count !== 1) {
+        throw new BadRequestException(
+          'Cannot modify answers for an assessment that is no longer in progress.',
+        );
+      }
+
+      for (const ans of dto.answers) {
+        await tx.assessmentAnswer.upsert({
           where: {
             assessmentId_questionId: {
               assessmentId: assessment.id,
@@ -400,9 +496,9 @@ export class AssessmentsService {
             numericValue: ans.numericValue !== undefined ? ans.numericValue : null,
             rawInput: ans.rawInput !== undefined ? ans.rawInput : undefined,
           },
-        }),
-      ),
-    );
+        });
+      }
+    });
 
     // Refresh answers and recompute progress
     const updatedAnswers = await this.prisma.assessmentAnswer.findMany({
@@ -469,10 +565,8 @@ export class AssessmentsService {
    * Completes an assessment session after validating that all required visible questions are answered.
    */
   async completeAssessment(sessionToken: string): Promise<CompleteAssessmentResponseDto> {
-    const assessment = await this.findAssessmentByToken(sessionToken);
-
-    // Idempotent completion check
-    if (assessment.status === AssessmentStatus.COMPLETED) {
+    const assessment = await this.findAssessmentForScoring(sessionToken);
+    if (assessment.status === AssessmentStatus.COMPLETED && assessment.result) {
       return {
         success: true,
         assessmentId: assessment.id,
@@ -481,188 +575,218 @@ export class AssessmentsService {
         message: 'Assessment is already marked as completed.',
       };
     }
-
-    const questions = assessment.calculatorVersion.questions;
-    const answers = assessment.answers;
-
-    const answerSnapshots: AnswerSnapshot[] = answers.map((a) => ({
-      questionId: a.questionId,
-      questionCode: a.question.code,
-      selectedOptionValue: a.selectedOption?.value || null,
-      selectedOptionId: a.selectedOptionId,
-      textValue: a.textValue,
-      numericValue: a.numericValue,
-      rawInput: a.rawInput,
-    }));
-
-    const answerMap = new Map(answers.map((a) => [a.questionId, a]));
-
-    // Validate that all visible required questions have non-empty answers
-    for (const q of questions) {
-      const isVisible = ConditionEvaluator.isQuestionVisible(
-        q.displayConditions as any,
-        answerSnapshots,
-      );
-
-      if (isVisible && q.isRequired) {
-        const ans = answerMap.get(q.id);
-        if (!ans) {
-          throw new BadRequestException(
-            `Required question "${q.title}" (${q.code}) has not been answered.`,
-          );
-        }
-
-        const hasValue =
-          ans.selectedOptionId !== null ||
-          (ans.textValue !== null && ans.textValue !== '') ||
-          ans.numericValue !== null ||
-          ans.rawInput !== null;
-
-        if (!hasValue) {
-          throw new BadRequestException(
-            `Required question "${q.title}" (${q.code}) contains an empty response.`,
-          );
-        }
-      }
+    if (
+      assessment.status !== AssessmentStatus.IN_PROGRESS &&
+      assessment.status !== AssessmentStatus.COMPLETED
+    ) {
+      throw new BadRequestException('Only in-progress assessments can be completed.');
     }
 
-    const completedAt = new Date();
-    await this.prisma.assessment.update({
-      where: { id: assessment.id },
-      data: {
-        status: AssessmentStatus.COMPLETED,
-        completedAt,
-      },
-    });
+    const completedAt = assessment.completedAt || new Date();
+    await this.persistAssessmentResult(assessment, completedAt);
 
     return {
       success: true,
       assessmentId: assessment.id,
       status: AssessmentStatus.COMPLETED,
       completedAt,
-      message: 'Assessment completed successfully. Ready for scoring and lead capture.',
+      message: 'Assessment completed and results generated successfully.',
     };
   }
 
   /**
    * Deterministically executes scoring and recommendation evaluation in an atomic transaction.
-   * If an immutable result already exists, returns it idempotently without recomputing.
+   * Results can only be generated for completed assessments.
    */
   async generateAssessmentResult(sessionToken: string): Promise<AssessmentFullResultResponseDto> {
     const assessment = await this.findAssessmentForScoring(sessionToken);
 
-    // 1. Idempotency Check: if result already exists and is immutable, return it
-    if (assessment.result && assessment.result.isImmutable) {
-      return this.formatFullResultResponse(assessment, assessment.result, assessment.recommendations);
+    if (assessment.status !== AssessmentStatus.COMPLETED) {
+      throw new BadRequestException('Assessment must be completed before results can be generated.');
+    }
+    return this.persistAssessmentResult(
+      assessment,
+      assessment.completedAt || new Date(),
+    );
+  }
+
+  private async persistAssessmentResult(
+    assessment: Awaited<ReturnType<AssessmentsService['findAssessmentForScoring']>>,
+    completedAt: Date,
+  ): Promise<AssessmentFullResultResponseDto> {
+    if (assessment.result) {
+      if (assessment.status !== AssessmentStatus.COMPLETED) {
+        throw new ConflictException('An incomplete assessment cannot have a result.');
+      }
+      return this.formatFullResultResponse(
+        assessment,
+        assessment.result,
+        assessment.recommendations,
+      );
     }
 
-    // 2. Map answers to snapshots
-    const answerSnapshots: AnswerSnapshot[] = assessment.answers.map((a) => ({
-      questionId: a.questionId,
-      questionCode: a.question.code,
-      selectedOptionValue: a.selectedOption?.value || null,
-      selectedOptionId: a.selectedOptionId,
-      textValue: a.textValue,
-      numericValue: a.numericValue,
-      rawInput: a.rawInput,
-    }));
-
-    // 3. Execute deterministic scoring
-    const scoringResult = this.scoringService.calculateScores({
-      calculatorSlug: assessment.calculatorVersion.calculator.slug,
-      categories: assessment.calculatorVersion.scoreCategories.map((c) => ({
-        id: c.id,
-        code: c.code,
-        name: c.name,
-        weight: c.weight,
-      })),
-      questions: assessment.calculatorVersion.questions.map((q) => ({
-        id: q.id,
-        code: q.code,
-        title: q.title,
-        type: q.type,
-        weight: q.weight,
-        isRequired: q.isRequired,
-        scoreCategoryId: q.scoreCategoryId,
-        displayConditions: q.displayConditions,
-        options: q.options.map((o) => ({
-          id: o.id,
-          value: o.value,
-          scoreValue: o.scoreValue,
-        })),
-      })),
-      scoringRules: assessment.calculatorVersion.scoringRules.map((r) => ({
-        id: r.id,
-        name: r.name,
-        scoreCategoryId: r.scoreCategoryId,
-        conditionExpression: r.conditionExpression,
-        multiplier: r.multiplier,
-      })),
-      answers: answerSnapshots,
-    });
-
-    // 4. Execute recommendation rules evaluation
-    const generatedRecommendations = this.recommendationService.evaluateRecommendations(
-      assessment.calculatorVersion.recommendationRules.map((r) => ({
-        id: r.id,
-        templateId: r.templateId,
-        scoreCategoryId: r.scoreCategoryId,
-        scoreCategory: r.scoreCategory ? { id: r.scoreCategory.id, code: r.scoreCategory.code, name: r.scoreCategory.name } : null,
-        minScore: r.minScore,
-        maxScore: r.maxScore,
-        conditionJson: r.conditionJson,
-        template: {
-          id: r.template.id,
-          code: r.template.code,
-          title: r.template.title,
-          summary: r.template.summary,
-          actionPlan: r.template.actionPlan,
-          priority: r.template.priority,
-          serviceLink: r.template.serviceLink,
-        },
-      })),
-      scoringResult,
-      answerSnapshots,
-    );
-
-    // 5. Execute atomic transaction in PostgreSQL
     const { savedResult, savedRecommendations } = await this.prisma.$transaction(async (tx) => {
-      // Upsert immutable result
-      const resultRecord = await tx.assessmentResult.upsert({
-        where: { assessmentId: assessment.id },
-        update: {
-          overallScore: scoringResult.overallScore,
-          normalizedIndex: scoringResult.normalizedIndex,
-          maturityLevel: scoringResult.maturityLevel,
-          categoryScores: scoringResult.categoryScores as any,
-          calculatedMetrics: {
-            riskLevel: scoringResult.riskLevel,
-            benchmarkComparison: scoringResult.benchmarkComparison,
-          },
-          isImmutable: true,
-          calculatedAt: scoringResult.calculatedAt,
+      const completionClaim = await tx.assessment.updateMany({
+        where: {
+          id: assessment.id,
+          status: assessment.status,
+          result: { is: null },
         },
-        create: {
+        data: {
+          status: AssessmentStatus.COMPLETED,
+          completedAt,
+        },
+      });
+
+      if (completionClaim.count === 0) {
+        const existingResult = await tx.assessmentResult.findUnique({
+          where: { assessmentId: assessment.id },
+        });
+        if (!existingResult) {
+          throw new ConflictException(
+            'Assessment state changed while results were being generated. Retry the request.',
+          );
+        }
+        const existingRecommendations = await tx.assessmentRecommendation.findMany({
+          where: { assessmentId: assessment.id },
+          include: { template: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        return {
+          savedResult: existingResult,
+          savedRecommendations: existingRecommendations,
+        };
+      }
+
+      const persistedAnswers = await tx.assessmentAnswer.findMany({
+        where: { assessmentId: assessment.id },
+        include: {
+          question: true,
+          selectedOption: true,
+        },
+      });
+      const answerSnapshots: AnswerSnapshot[] = persistedAnswers.map((answer) => ({
+        questionId: answer.questionId,
+        questionCode: answer.question.code,
+        selectedOptionValue: answer.selectedOption?.value || null,
+        selectedOptionId: answer.selectedOptionId,
+        textValue: answer.textValue,
+        numericValue: answer.numericValue,
+        rawInput: answer.rawInput,
+      }));
+      const answerMap = new Map(persistedAnswers.map((answer) => [answer.questionId, answer]));
+
+      for (const question of assessment.calculatorVersion.questions) {
+        const isVisible = ConditionEvaluator.isQuestionVisible(
+          question.displayConditions as any,
+          answerSnapshots,
+        );
+        if (!isVisible || !question.isRequired) {
+          continue;
+        }
+
+        const answer = answerMap.get(question.id);
+        if (!answer) {
+          throw new BadRequestException(
+            `Required question "${question.title}" (${question.code}) has not been answered.`,
+          );
+        }
+
+        const hasValue =
+          answer.selectedOptionId !== null ||
+          (answer.textValue !== null && answer.textValue !== '') ||
+          answer.numericValue !== null ||
+          answer.rawInput !== null;
+        if (!hasValue) {
+          throw new BadRequestException(
+            `Required question "${question.title}" (${question.code}) contains an empty response.`,
+          );
+        }
+      }
+
+      const scoringResult = this.scoringService.calculateScores({
+        calculatorSlug: assessment.calculatorVersion.calculator.slug,
+        categories: assessment.calculatorVersion.scoreCategories.map((category) => ({
+          id: category.id,
+          code: category.code,
+          name: category.name,
+          weight: category.weight,
+        })),
+        questions: assessment.calculatorVersion.questions.map((question) => ({
+          id: question.id,
+          code: question.code,
+          title: question.title,
+          type: question.type,
+          weight: question.weight,
+          isRequired: question.isRequired,
+          scoreCategoryId: question.scoreCategoryId,
+          displayConditions: question.displayConditions,
+          options: question.options.map((option) => ({
+            id: option.id,
+            value: option.value,
+            scoreValue: option.scoreValue,
+          })),
+        })),
+        scoringRules: assessment.calculatorVersion.scoringRules.map((rule) => ({
+          id: rule.id,
+          name: rule.name,
+          scoreCategoryId: rule.scoreCategoryId,
+          conditionExpression: rule.conditionExpression,
+          multiplier: rule.multiplier,
+        })),
+        answers: answerSnapshots,
+      });
+      const categoryScores = toPrismaJsonValue(scoringResult.categoryScores);
+      const calculatedMetrics = toPrismaJsonValue({
+        riskLevel: scoringResult.riskLevel,
+        benchmarkComparison: scoringResult.benchmarkComparison,
+      });
+
+      const resultRecord = await tx.assessmentResult.create({
+        data: {
           assessmentId: assessment.id,
           overallScore: scoringResult.overallScore,
           normalizedIndex: scoringResult.normalizedIndex,
           maturityLevel: scoringResult.maturityLevel,
-          categoryScores: scoringResult.categoryScores as any,
-          calculatedMetrics: {
-            riskLevel: scoringResult.riskLevel,
-            benchmarkComparison: scoringResult.benchmarkComparison,
-          },
+          categoryScores,
+          calculatedMetrics,
           isImmutable: true,
           calculatedAt: scoringResult.calculatedAt,
         },
       });
 
-      // Freeze recommendations
-      await tx.assessmentRecommendation.deleteMany({ where: { assessmentId: assessment.id } });
-      const createdRecs = [];
-      for (const rec of generatedRecommendations) {
-        const created = await tx.assessmentRecommendation.create({
-          data: {
+      const generatedRecommendations = this.recommendationService.evaluateRecommendations(
+        assessment.calculatorVersion.recommendationRules.map((r) => ({
+          id: r.id,
+          templateId: r.templateId,
+          scoreCategoryId: r.scoreCategoryId,
+          scoreCategory: r.scoreCategory
+            ? {
+                id: r.scoreCategory.id,
+                code: r.scoreCategory.code,
+                name: r.scoreCategory.name,
+              }
+            : null,
+          minScore: r.minScore,
+          maxScore: r.maxScore,
+          conditionJson: r.conditionJson,
+          template: {
+            id: r.template.id,
+            code: r.template.code,
+            title: r.template.title,
+            summary: r.template.summary,
+            actionPlan: r.template.actionPlan,
+            priority: r.template.priority,
+            serviceLink: r.template.serviceLink,
+          },
+        })),
+        scoringResult,
+        answerSnapshots,
+      );
+
+      if (generatedRecommendations.length > 0) {
+        await tx.assessmentRecommendation.createMany({
+          data: generatedRecommendations.map((rec) => ({
             assessmentId: assessment.id,
             templateId: rec.templateId,
             ruleId: rec.ruleId || null,
@@ -671,23 +795,20 @@ export class AssessmentsService {
             actionPlan: rec.actionPlan,
             priority: rec.priority,
             status: rec.status,
-          },
-        });
-        createdRecs.push(created);
-      }
-
-      // Mark assessment as completed if not yet marked
-      if (assessment.status !== AssessmentStatus.COMPLETED) {
-        await tx.assessment.update({
-          where: { id: assessment.id },
-          data: {
-            status: AssessmentStatus.COMPLETED,
-            completedAt: new Date(),
-          },
+          })),
         });
       }
 
-      return { savedResult: resultRecord, savedRecommendations: createdRecs };
+      const createdRecommendations = await tx.assessmentRecommendation.findMany({
+        where: { assessmentId: assessment.id },
+        include: { template: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      return {
+        savedResult: resultRecord,
+        savedRecommendations: createdRecommendations,
+      };
     });
 
     return this.formatFullResultResponse(assessment, savedResult, savedRecommendations);
@@ -698,6 +819,9 @@ export class AssessmentsService {
    */
   async getAssessmentResult(sessionToken: string): Promise<AssessmentResultResponseDto> {
     const assessment = await this.findAssessmentByToken(sessionToken);
+    if (assessment.status !== AssessmentStatus.COMPLETED) {
+      throw new BadRequestException('Assessment results are available after completion.');
+    }
 
     const result = await this.prisma.assessmentResult.findUnique({
       where: { assessmentId: assessment.id },
@@ -705,24 +829,11 @@ export class AssessmentsService {
 
     if (!result) {
       throw new NotFoundException(
-        'Assessment has not yet been scored. Call POST /api/v1/assessments/:sessionToken/score first.',
+        'Assessment result was not found.',
       );
     }
 
-    const calculatedMetrics = (result.calculatedMetrics as any) || {};
-
-    return {
-      assessmentId: assessment.id,
-      sessionToken: assessment.sessionToken,
-      overallScore: result.overallScore,
-      normalizedIndex: result.normalizedIndex,
-      maturityLevel: result.maturityLevel,
-      riskLevel: calculatedMetrics.riskLevel || 'MODERATE',
-      categoryScores: result.categoryScores as any,
-      benchmark: calculatedMetrics.benchmarkComparison || { status: 'unconfigured' },
-      isImmutable: result.isImmutable,
-      calculatedAt: result.calculatedAt,
-    };
+    return this.formatAssessmentResult(assessment, result);
   }
 
   /**
@@ -730,6 +841,17 @@ export class AssessmentsService {
    */
   async getAssessmentRecommendations(sessionToken: string): Promise<AssessmentRecommendationItemDto[]> {
     const assessment = await this.findAssessmentByToken(sessionToken);
+    if (assessment.status !== AssessmentStatus.COMPLETED) {
+      throw new BadRequestException('Recommendations are available after completion.');
+    }
+
+    const result = await this.prisma.assessmentResult.findUnique({
+      where: { assessmentId: assessment.id },
+      select: { id: true },
+    });
+    if (!result) {
+      throw new NotFoundException('Assessment result was not found.');
+    }
 
     const recs = await this.prisma.assessmentRecommendation.findMany({
       where: { assessmentId: assessment.id },
@@ -737,17 +859,9 @@ export class AssessmentsService {
       orderBy: { createdAt: 'asc' },
     });
 
-    return recs.map((r) => ({
-      id: r.id,
-      templateId: r.templateId,
-      title: r.title,
-      summary: r.summary,
-      actionPlan: r.actionPlan,
-      priority: r.priority,
-      status: r.status,
-      serviceLink: r.template?.serviceLink || null,
-      createdAt: r.createdAt,
-    }));
+    return recs.map((recommendation) =>
+      this.formatAssessmentRecommendation(recommendation),
+    );
   }
 
   /**
@@ -755,36 +869,162 @@ export class AssessmentsService {
    */
   private formatFullResultResponse(
     assessment: { id: string; sessionToken: string },
-    result: any,
-    recommendations: any[],
+    result: AssessmentResultRecord,
+    recommendations: AssessmentRecommendationRecord[],
   ): AssessmentFullResultResponseDto {
-    const calculatedMetrics = (result.calculatedMetrics as any) || {};
+    return {
+      result: this.formatAssessmentResult(assessment, result),
+      recommendations: recommendations.map((recommendation) =>
+        this.formatAssessmentRecommendation(recommendation),
+      ),
+    };
+  }
+
+  private formatAssessmentResult(
+    assessment: { id: string; sessionToken: string },
+    result: AssessmentResultRecord,
+  ): AssessmentResultResponseDto {
+    const metrics = this.readCalculatedMetrics(result.calculatedMetrics);
+    return {
+      assessmentId: assessment.id,
+      sessionToken: assessment.sessionToken,
+      overallScore: result.overallScore,
+      normalizedIndex: result.normalizedIndex,
+      maturityLevel: result.maturityLevel,
+      riskLevel: metrics.riskLevel,
+      categoryScores: this.formatCategoryScores(result.categoryScores),
+      benchmark: metrics.benchmark,
+      isImmutable: result.isImmutable,
+      calculatedAt: result.calculatedAt,
+    };
+  }
+
+  private formatAssessmentRecommendation(
+    recommendation: AssessmentRecommendationRecord,
+  ): AssessmentRecommendationItemDto {
+    return {
+      id: recommendation.id,
+      templateId: recommendation.templateId,
+      title: recommendation.title,
+      summary: recommendation.summary,
+      actionPlan: recommendation.actionPlan,
+      priority: recommendation.priority,
+      status: recommendation.status,
+      serviceLink: recommendation.template.serviceLink,
+      createdAt: recommendation.createdAt,
+    };
+  }
+
+  private readCalculatedMetrics(value: Prisma.JsonValue | null): {
+    riskLevel: AssessmentResultResponseDto['riskLevel'];
+    benchmark: BenchmarkComparisonDto;
+  } {
+    if (value === null) {
+      return {
+        riskLevel: 'MODERATE',
+        benchmark: { status: 'unconfigured' },
+      };
+    }
+    if (typeof value !== 'object' || Array.isArray(value)) {
+      throw new InternalServerErrorException('Assessment metrics are malformed.');
+    }
+
+    const riskLevel = value.riskLevel;
+    if (
+      riskLevel !== 'LOW' &&
+      riskLevel !== 'MODERATE' &&
+      riskLevel !== 'HIGH' &&
+      riskLevel !== 'CRITICAL'
+    ) {
+      throw new InternalServerErrorException('Assessment risk level is malformed.');
+    }
+
+    const benchmarkValue = value.benchmarkComparison;
+    if (
+      benchmarkValue === null ||
+      typeof benchmarkValue !== 'object' ||
+      Array.isArray(benchmarkValue) ||
+      (benchmarkValue.status !== 'configured' &&
+        benchmarkValue.status !== 'unconfigured')
+    ) {
+      throw new InternalServerErrorException('Assessment benchmark is malformed.');
+    }
 
     return {
-      result: {
-        assessmentId: assessment.id,
-        sessionToken: assessment.sessionToken,
-        overallScore: result.overallScore,
-        normalizedIndex: result.normalizedIndex,
-        maturityLevel: result.maturityLevel,
-        riskLevel: calculatedMetrics.riskLevel || 'MODERATE',
-        categoryScores: result.categoryScores as any,
-        benchmark: calculatedMetrics.benchmarkComparison || { status: 'unconfigured' },
-        isImmutable: result.isImmutable,
-        calculatedAt: result.calculatedAt,
+      riskLevel,
+      benchmark: {
+        status: benchmarkValue.status,
+        ...(typeof benchmarkValue.source === 'string' && {
+          source: benchmarkValue.source,
+        }),
+        ...(typeof benchmarkValue.segment === 'string' && {
+          segment: benchmarkValue.segment,
+        }),
+        ...(typeof benchmarkValue.geography === 'string' && {
+          geography: benchmarkValue.geography,
+        }),
+        ...(typeof benchmarkValue.effectiveDate === 'string' && {
+          effectiveDate: benchmarkValue.effectiveDate,
+        }),
+        ...(typeof benchmarkValue.industryAverageIndex === 'number' && {
+          industryAverageIndex: benchmarkValue.industryAverageIndex,
+        }),
+        ...(typeof benchmarkValue.variance === 'number' && {
+          variance: benchmarkValue.variance,
+        }),
+        ...(typeof benchmarkValue.message === 'string' && {
+          message: benchmarkValue.message,
+        }),
       },
-      recommendations: recommendations.map((r) => ({
-        id: r.id,
-        templateId: r.templateId,
-        title: r.title,
-        summary: r.summary,
-        actionPlan: r.actionPlan,
-        priority: r.priority,
-        status: r.status,
-        serviceLink: r.template?.serviceLink || null,
-        createdAt: r.createdAt,
-      })),
     };
+  }
+
+  private formatCategoryScores(
+    value: Prisma.JsonValue,
+  ): Record<string, CategoryScoreDetailDto> {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new InternalServerErrorException('Assessment category scores are malformed.');
+    }
+
+    const categories: Record<string, CategoryScoreDetailDto> = {};
+    for (const [code, category] of Object.entries(value)) {
+      if (category === null || typeof category !== 'object' || Array.isArray(category)) {
+        throw new InternalServerErrorException(`Assessment category "${code}" is malformed.`);
+      }
+
+      const name = category.categoryName;
+      const riskLevel = category.riskLevel;
+      const answeredCount = category.answeredQuestionsCount;
+      const visibleCount = category.visibleQuestionsCount;
+      if (
+        typeof name !== 'string' ||
+        typeof category.weight !== 'number' ||
+        typeof category.rawScore !== 'number' ||
+        typeof category.maxPossibleScore !== 'number' ||
+        typeof category.percentage !== 'number' ||
+        (riskLevel !== 'LOW' &&
+          riskLevel !== 'MODERATE' &&
+          riskLevel !== 'HIGH' &&
+          riskLevel !== 'CRITICAL') ||
+        typeof answeredCount !== 'number' ||
+        typeof visibleCount !== 'number'
+      ) {
+        throw new InternalServerErrorException(`Assessment category "${code}" is malformed.`);
+      }
+
+      categories[code] = {
+        code,
+        name,
+        weight: category.weight,
+        rawScore: category.rawScore,
+        maxPossibleScore: category.maxPossibleScore,
+        percentage: category.percentage,
+        riskLevel,
+        answeredCount,
+        visibleCount,
+      };
+    }
+    return categories;
   }
 
   /**
