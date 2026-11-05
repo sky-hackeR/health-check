@@ -4,7 +4,7 @@ services:
     name: nest-backend
     runtime: node
     plan: starter
-    rootDir: apps/backend # Point to your NestJS folder
+    rootDir: backend # Point to your NestJS folder
     buildCommand: npm install && npm run build
     startCommand: npm run start:prod
     envVars:
@@ -16,7 +16,7 @@ services:
     name: next-frontend
     runtime: node
     plan: starter
-    rootDir: apps/frontend # Point to your Next.js folder
+    rootDir: frontend # Point to your Next.js folder
     buildCommand: npm install && npm run build
     startCommand: npm run start
     envVars:
