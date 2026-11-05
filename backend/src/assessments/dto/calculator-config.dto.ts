@@ -51,6 +51,12 @@ export class PublicQuestionDto {
   })
   displayConditions?: any;
 
+  @ApiPropertyOptional({ description: 'Client input constraints; server validation is authoritative.' })
+  validationRules?: any;
+
+  @ApiPropertyOptional({ description: 'Initial value for a newly displayed question.' })
+  defaultValue?: any;
+
   @ApiProperty({ type: [PublicOptionDto] })
   options: PublicOptionDto[];
 }
@@ -90,6 +96,38 @@ export class CalculatorConfigResponseDto {
 
   @ApiProperty({ type: [PublicQuestionDto] })
   questions: PublicQuestionDto[];
+
+  @ApiProperty({ example: 4 })
+  totalQuestions: number;
+}
+
+export class PublishedCalculatorSummaryDto {
+  @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174003' })
+  id: string;
+
+  @ApiProperty({ example: 'hr-health-check' })
+  slug: string;
+
+  @ApiProperty({ example: 'GoSwiftHR Workforce Health & Maturity Index' })
+  name: string;
+
+  @ApiPropertyOptional({ example: 'Comprehensive diagnostic assessing organizational readiness.' })
+  description?: string | null;
+
+  @ApiProperty({ example: 1 })
+  versionNumber: number;
+
+  @ApiPropertyOptional({ example: '2026-11-03T13:32:26.000Z' })
+  publishedAt?: Date | null;
+
+  @ApiProperty({ type: [PublicCategoryDto] })
+  categories: PublicCategoryDto[];
+
+  @ApiProperty({ type: [String], example: ['How recently has your organization reviewed its policies?'] })
+  questionTopics: string[];
+
+  @ApiProperty({ type: [String], example: ['SINGLE_CHOICE', 'BOOLEAN'] })
+  questionTypes: string[];
 
   @ApiProperty({ example: 4 })
   totalQuestions: number;

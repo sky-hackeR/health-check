@@ -20,6 +20,18 @@ const QUESTION_ID = 'question-1';
 const OPTION_ID = 'option-1';
 const TEMPLATE_ID = 'template-1';
 
+interface AssessmentQuestionFixture {
+  id: string;
+  code: string;
+  title: string;
+  type: QuestionType;
+  weight: number;
+  isRequired: boolean;
+  scoreCategoryId: string | null;
+  displayConditions: unknown | null;
+  options: Array<{ id: string; value: string; scoreValue: number }>;
+}
+
 describe('AssessmentsService result lifecycle', () => {
   let service: AssessmentsService;
   let prisma: PrismaService;
@@ -36,37 +48,41 @@ describe('AssessmentsService result lifecycle', () => {
   let recommendationService: RecommendationService;
   let assessmentReadOverride: ReturnType<typeof assessmentRecord> | null;
 
-  const assessmentRecord = () => ({
+  const assessmentRecord = (
+    calculatorSlug = 'test-calculator',
+    questions: AssessmentQuestionFixture[] = [
+      {
+        id: QUESTION_ID,
+        code: 'Q1',
+        title: 'Compliance question',
+        type: QuestionType.SINGLE_CHOICE,
+        weight: 1,
+        isRequired: true,
+        scoreCategoryId: CATEGORY_ID,
+        displayConditions: null,
+        options: [
+          { id: OPTION_ID, value: 'yes', scoreValue: 80 },
+          { id: 'option-2', value: 'no', scoreValue: 20 },
+        ],
+      },
+    ],
+  ) => ({
     id: ASSESSMENT_ID,
     sessionToken: SESSION_TOKEN,
     status: state.status,
     completedAt: state.completedAt,
     expiresAt: null,
     deletedAt: null,
+    leadId: 'lead-1',
     result: state.result,
     recommendations: state.recommendations,
     answers: state.answers,
     calculatorVersion: {
-      calculator: { slug: 'test-calculator' },
+      calculator: { slug: calculatorSlug },
       scoreCategories: [
         { id: CATEGORY_ID, code: 'COMPLIANCE', name: 'Compliance', weight: 1 },
       ],
-      questions: [
-        {
-          id: QUESTION_ID,
-          code: 'Q1',
-          title: 'Compliance question',
-          type: QuestionType.SINGLE_CHOICE,
-          weight: 1,
-          isRequired: true,
-          scoreCategoryId: CATEGORY_ID,
-          displayConditions: null,
-          options: [
-            { id: OPTION_ID, value: 'yes', scoreValue: 80 },
-            { id: 'option-2', value: 'no', scoreValue: 20 },
-          ],
-        },
-      ],
+      questions,
       scoringRules: [],
       recommendationRules: [
         {
@@ -157,6 +173,35 @@ describe('AssessmentsService result lifecycle', () => {
           return { count: data.length };
         }),
         findMany: jest.fn(async () => state.recommendations),
+      },
+      recommendationTemplate: {
+        findMany: jest.fn(
+          async ({
+            where,
+          }: {
+            where: {
+              code?: { in: string[] };
+              versionGroupId?: { in: string[] };
+            };
+          }) => {
+            if (where.code) {
+              return where.code.in.map((code) => ({
+                id: `${code}-id`,
+                code,
+                versionGroupId: `${code}-group`,
+              }));
+            }
+            return (where.versionGroupId?.in ?? []).map((versionGroupId) => ({
+              id: `${versionGroupId}-id`,
+              versionGroupId,
+              title: 'Published recommendation',
+              summary: 'Configured summary.',
+              actionPlan: 'Configured action plan.',
+              priority: RecommendationPriority.MEDIUM,
+              serviceLink: null,
+            }));
+          },
+        ),
       },
     };
 
@@ -280,6 +325,118 @@ describe('AssessmentsService result lifecycle', () => {
     expect(state.result).toMatchObject({
       overallScore: 20,
       normalizedIndex: 20,
+    });
+  });
+
+  it('persists currency results without writing score or maturity values', async () => {
+    const calculateScores = jest.spyOn(scoringService, 'calculateScores');
+    const codes = [
+      'PC_EMPLOYEE_COUNT',
+      'PC_RUNS_PER_YEAR',
+      'PC_REGULAR_GROSS_PER_RUN',
+      'PC_VARIABLE_STATUS',
+      'PC_VARIABLE_GROSS_PER_RUN',
+      'PC_EMPLOYER_STATUTORY_STATUS',
+      'PC_EMPLOYER_STATUTORY_PER_RUN',
+      'PC_BENEFITS_STATUS',
+      'PC_BENEFITS_PER_RUN',
+      'PC_PROCESSING_STATUS',
+      'PC_PROCESSING_PER_RUN',
+    ];
+    const questions: AssessmentQuestionFixture[] = codes.map((code) => {
+      const statusQuestion = code.endsWith('_STATUS');
+      const amountStatusCode =
+        code === 'PC_VARIABLE_GROSS_PER_RUN'
+          ? 'PC_VARIABLE_STATUS'
+          : code === 'PC_EMPLOYER_STATUTORY_PER_RUN'
+            ? 'PC_EMPLOYER_STATUTORY_STATUS'
+            : code === 'PC_BENEFITS_PER_RUN'
+              ? 'PC_BENEFITS_STATUS'
+              : code === 'PC_PROCESSING_PER_RUN'
+                ? 'PC_PROCESSING_STATUS'
+                : null;
+      return {
+        id: `question-${code}`,
+        code,
+        title: code,
+        type:
+          code.includes('COUNT') || code.includes('RUNS') || code.includes('PER_RUN')
+            ? QuestionType.NUMERIC_INPUT
+            : QuestionType.SINGLE_CHOICE,
+        weight: 1,
+        isRequired: true,
+        scoreCategoryId: null,
+        displayConditions: amountStatusCode
+          ? { questionCode: amountStatusCode, operator: 'EQUALS', value: 'verified_amount' }
+          : null,
+        options: statusQuestion
+          ? [
+              { id: `option-${code}-zero`, value: 'verified_zero', scoreValue: 0 },
+              { id: `option-${code}-amount`, value: 'verified_amount', scoreValue: 0 },
+              { id: `option-${code}-unknown`, value: 'unknown', scoreValue: 0 },
+            ]
+          : [],
+      };
+    });
+
+    assessmentReadOverride = assessmentRecord('payroll-cost-calculator', questions);
+    state.answers = [
+      ['PC_EMPLOYEE_COUNT', 5],
+      ['PC_RUNS_PER_YEAR', 12],
+      ['PC_REGULAR_GROSS_PER_RUN', 250_000],
+      ['PC_VARIABLE_STATUS', 'verified_zero'],
+      ['PC_EMPLOYER_STATUTORY_STATUS', 'verified_zero'],
+      ['PC_BENEFITS_STATUS', 'verified_zero'],
+      ['PC_PROCESSING_STATUS', 'unknown'],
+    ].map(([code, value]) => ({
+      questionId: `question-${String(code)}`,
+      question: { code },
+      selectedOptionId: typeof value === 'string' ? `option-${String(code)}-${value}` : null,
+      selectedOption: typeof value === 'string' ? { value } : null,
+      textValue: null,
+      numericValue: typeof value === 'number' ? value : null,
+      rawInput: null,
+    }));
+
+    await service.completeAssessment(SESSION_TOKEN);
+
+    expect(state.result).toMatchObject({
+      overallScore: null,
+      normalizedIndex: null,
+      maturityLevel: null,
+      calculatedMetrics: {
+        resultType: 'PAYROLL_COST_ESTIMATE',
+        status: 'PARTIAL',
+        knownSubtotalPerRun: 250_000,
+        totalPerRun: null,
+        unknownComponents: ['Processing and service costs'],
+      },
+    });
+    expect(state.recommendations[0]).toMatchObject({
+      templateId: 'REC_VERIFY_PAYROLL_COST_INPUTS-group-id',
+      title: 'Published recommendation',
+      summary: 'Configured summary.',
+      actionPlan: 'Configured action plan.',
+    });
+    expect(calculateScores).not.toHaveBeenCalled();
+
+    assessmentReadOverride = {
+      ...assessmentRecord(),
+      status: AssessmentStatus.COMPLETED,
+      completedAt: state.completedAt,
+    };
+    const response = await service.getAssessmentResult(SESSION_TOKEN);
+    expect(response).toMatchObject({
+      resultType: 'PAYROLL_COST_ESTIMATE',
+      overallScore: null,
+      normalizedIndex: null,
+      maturityLevel: null,
+      riskLevel: null,
+      categoryScores: {},
+      calculatedMetrics: {
+        knownSubtotalPerRun: 250_000,
+        totalPerRun: null,
+      },
     });
   });
 

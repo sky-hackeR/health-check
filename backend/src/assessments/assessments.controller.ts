@@ -29,11 +29,28 @@ import {
   AssessmentRecommendationItemDto,
   AssessmentResultResponseDto,
 } from './dto/assessment-result-response.dto';
+import { CaptureAssessmentLeadDto } from './dto/capture-assessment-lead.dto';
+import { PublishedCalculatorSummaryDto } from './dto/calculator-config.dto';
+import type { Request } from 'express';
 
 @ApiTags('Public - Assessment Engine & Calculators')
 @Controller()
 export class AssessmentsController {
   constructor(private readonly assessmentsService: AssessmentsService) {}
+
+  @Get('calculators')
+  @ApiOperation({
+    summary: 'List active calculators with published assessment versions',
+    description:
+      'Returns public calculator names, descriptions, categories, and question counts without proprietary scoring rules.',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    type: [PublishedCalculatorSummaryDto],
+  })
+  async getPublishedCalculators(): Promise<PublishedCalculatorSummaryDto[]> {
+    return this.assessmentsService.getPublishedCalculators();
+  }
 
   @Get('calculators/:slug')
   @ApiOperation({
@@ -233,5 +250,25 @@ export class AssessmentsController {
     @Param('sessionToken') sessionToken: string,
   ): Promise<CompleteAssessmentResponseDto> {
     return this.assessmentsService.completeAssessment(sessionToken);
+  }
+
+  @Post('assessments/:sessionToken/lead')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Associate a completed assessment with a consenting lead',
+    description:
+      'Creates or updates a lead using existing records and associates it with the completed assessment.',
+  })
+  @ApiResponse({
+    status: HttpStatus.CREATED,
+    description: 'Lead associated with the completed assessment',
+  })
+  async captureLead(
+    @Param('sessionToken') sessionToken: string,
+    @Body() dto: CaptureAssessmentLeadDto,
+    @Req() req: Request,
+  ): Promise<{ leadId: string; calculatorName: string; alreadyAssociated: boolean }> {
+    const clientIp = req.ip || req.socket.remoteAddress || undefined;
+    return this.assessmentsService.captureLead(sessionToken, dto, clientIp);
   }
 }

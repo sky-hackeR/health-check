@@ -2,11 +2,17 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { DashboardQueryDto } from './dto/dashboard-query.dto';
 import { LeadsQueryDto } from './dto/leads-query.dto';
-import { LeadStatus, LeadQualificationTier, Prisma } from '@prisma/client';
+import { LeadStatus, Prisma } from '@prisma/client';
 
 @Injectable()
 export class DashboardService {
   private readonly logger = new Logger(DashboardService.name);
+  private readonly productCalculatorSlugs = [
+    'payroll-cost-calculator',
+    'payroll-compliance-calculator',
+    'hr-administrative-cost-calculator',
+    'hr-health-check',
+  ];
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -15,7 +21,11 @@ export class DashboardService {
    * Never returns mock or hardcoded data.
    */
   async getDashboardMetrics(query: DashboardQueryDto) {
-    const dateFilter = this.resolveDateRange(query.timeframe, query.from, query.to);
+    const dateFilter = this.resolveDateRange(
+      query.timeframe,
+      query.from,
+      query.to,
+    );
 
     // 1. Concurrent counts using Prisma aggregation
     const [
@@ -24,6 +34,7 @@ export class DashboardService {
       qualifiedLeads,
       completedAssessments,
       abandonedAssessments,
+      inProgressAssessments,
       totalAssessments,
       walkthroughRequests,
       statusCounts,
@@ -33,7 +44,6 @@ export class DashboardService {
       calculatorsRaw,
       completedPerVersionRaw,
       dbLatency,
-      integrationLogs,
     ] = await Promise.all([
       // Total leads within timeframe
       this.prisma.lead.count({
@@ -79,6 +89,14 @@ export class DashboardService {
         },
       }),
 
+      this.prisma.assessment.count({
+        where: {
+          status: 'IN_PROGRESS',
+          deletedAt: null,
+          ...(dateFilter ? { createdAt: dateFilter } : {}),
+        },
+      }),
+
       // Total assessments started
       this.prisma.assessment.count({
         where: {
@@ -104,12 +122,19 @@ export class DashboardService {
 
       // Recent leads (up to 5)
       this.prisma.lead.findMany({
-        where: { deletedAt: null },
+        where: {
+          deletedAt: null,
+          ...(dateFilter ? { createdAt: dateFilter } : {}),
+        },
         take: 5,
         orderBy: { createdAt: 'desc' },
         include: {
           company: true,
+          assignedAdmin: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
           assessments: {
+            where: { deletedAt: null },
             take: 1,
             orderBy: { createdAt: 'desc' },
             include: {
@@ -119,11 +144,18 @@ export class DashboardService {
               },
             },
           },
+          followUps: {
+            where: { status: { in: ['PENDING', 'RESCHEDULED'] } },
+            orderBy: { dueAt: 'asc' },
+            take: 1,
+            select: { dueAt: true },
+          },
         },
       }),
 
       // Recent activities (up to 6)
       this.prisma.leadActivity.findMany({
+        where: dateFilter ? { createdAt: dateFilter } : {},
         take: 6,
         orderBy: { createdAt: 'desc' },
         include: {
@@ -140,7 +172,10 @@ export class DashboardService {
 
       // Follow-up queue: pending walkthroughs
       this.prisma.walkthroughRequest.findMany({
-        where: { status: 'PENDING' },
+        where: {
+          status: 'PENDING',
+          ...(dateFilter ? { createdAt: dateFilter } : {}),
+        },
         take: 5,
         orderBy: { createdAt: 'desc' },
         include: {
@@ -152,7 +187,11 @@ export class DashboardService {
 
       // Active calculators
       this.prisma.calculator.findMany({
-        where: { isActive: true, deletedAt: null },
+        where: {
+          isActive: true,
+          deletedAt: null,
+          slug: { in: this.productCalculatorSlugs },
+        },
         include: {
           versions: {
             where: { isPublished: true },
@@ -174,13 +213,6 @@ export class DashboardService {
 
       // Live database latency probe
       this.checkDatabaseLatency(),
-
-      // Latest integration logs for third-party status
-      this.prisma.integrationLog.findMany({
-        distinct: ['serviceName'],
-        orderBy: { createdAt: 'desc' },
-        take: 10,
-      }),
     ]);
 
     // 2. Exact rate calculations with documented formulas
@@ -252,7 +284,10 @@ export class DashboardService {
       },
     });
 
-    const totalGeoCompanies = geoCountsRaw.reduce((acc, curr) => acc + curr._count.id, 0);
+    const totalGeoCompanies = geoCountsRaw.reduce(
+      (acc, curr) => acc + curr._count.id,
+      0,
+    );
     const geographicDistribution = geoCountsRaw.map((geo) => ({
       region: geo.country || 'Unknown',
       count: geo._count.id,
@@ -270,13 +305,25 @@ export class DashboardService {
       const latestAssessment = lead.assessments[0];
       return {
         id: lead.id,
-        name: [lead.firstName, lead.lastName].filter(Boolean).join(' ') || lead.email,
+        name:
+          [lead.firstName, lead.lastName].filter(Boolean).join(' ') ||
+          lead.email,
         email: lead.email,
         company: lead.company?.name || 'Independent',
-        calculator: latestAssessment?.calculatorVersion?.calculator?.name || 'Direct Lead',
-        score: latestAssessment?.result ? Math.round(latestAssessment.result.overallScore) : null,
+        calculator:
+          latestAssessment?.calculatorVersion?.calculator?.name ||
+          'Direct Lead',
+        score:
+          latestAssessment?.result?.overallScore == null
+            ? null
+            : Math.round(latestAssessment.result.overallScore),
         tier: lead.qualificationTier,
         status: lead.status,
+        source: lead.source,
+        hasOverdueFollowUp: Boolean(
+          lead.followUps[0] && lead.followUps[0].dueAt < new Date(),
+        ),
+        assignedAdmin: lead.assignedAdmin,
         date: lead.createdAt.toISOString(),
       };
     });
@@ -285,22 +332,26 @@ export class DashboardService {
     const followUps = pendingWalkthroughsRaw.map((req) => ({
       id: req.id,
       leadId: req.leadId,
-      name: [req.lead.firstName, req.lead.lastName].filter(Boolean).join(' ') || req.lead.email,
+      name:
+        [req.lead.firstName, req.lead.lastName].filter(Boolean).join(' ') ||
+        req.lead.email,
       company: req.lead.company?.name || 'Independent',
       note: req.notes || 'Consultation walkthrough requested via portal',
-      timeDue: req.preferredDate ? req.preferredDate.toISOString() : req.createdAt.toISOString(),
+      timeDue: req.preferredDate
+        ? req.preferredDate.toISOString()
+        : req.createdAt.toISOString(),
       status: req.status,
     }));
 
-    // 9. Integration health status based on actual records
+    // Integration logs alone do not verify that a third-party connection works.
     const integrationStatus = {
       database: {
         status: dbLatency >= 0 ? 'CONNECTED' : 'DISCONNECTED',
         latencyMs: dbLatency >= 0 ? dbLatency : null,
       },
-      hubspot: this.resolveServiceStatus('HUBSPOT', integrationLogs),
-      sendgrid: this.resolveServiceStatus('SENDGRID', integrationLogs),
-      webhook: this.resolveServiceStatus('WEBHOOK', integrationLogs),
+      hubspot: { status: 'NOT_IMPLEMENTED', lastSync: null },
+      sendgrid: { status: 'NOT_IMPLEMENTED', lastSync: null },
+      webhook: { status: 'NOT_IMPLEMENTED', lastSync: null },
     };
 
     return {
@@ -310,12 +361,14 @@ export class DashboardService {
         qualifiedLeads,
         completedAssessments,
         abandonedAssessments,
+        inProgressAssessments,
         totalAssessments,
         walkthroughRequests,
         completionRate,
         leadConversionRate,
         abandonmentRate,
-        conversionRateDescription: 'Qualified leads divided by total captured leads (0% when no leads exist)',
+        conversionRateDescription:
+          'Qualified leads divided by total captured leads (0% when no leads exist)',
       },
       acquisitionTrend,
       calculatorEngagement,
@@ -326,7 +379,8 @@ export class DashboardService {
         id: act.id,
         leadId: act.leadId,
         userName:
-          [act.lead.firstName, act.lead.lastName].filter(Boolean).join(' ') || act.lead.email,
+          [act.lead.firstName, act.lead.lastName].filter(Boolean).join(' ') ||
+          act.lead.email,
         type: act.type,
         description: act.description,
         createdAt: act.createdAt.toISOString(),
@@ -342,19 +396,37 @@ export class DashboardService {
    * Retrieves paginated, searchable, and filtered leads.
    */
   async getLeads(query: LeadsQueryDto) {
-    const { page = 1, limit = 10, search, status, tier, from, to } = query;
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      status,
+      tier,
+      source,
+      companyId,
+      calculatorSlug,
+      from,
+      to,
+    } = query;
     const skip = (page - 1) * limit;
 
     const where: Prisma.LeadWhereInput = {
       deletedAt: null,
     };
 
-    if (status && Object.values(LeadStatus).includes(status as LeadStatus)) {
-      where.status = status as LeadStatus;
-    }
-
-    if (tier && Object.values(LeadQualificationTier).includes(tier as LeadQualificationTier)) {
-      where.qualificationTier = tier as LeadQualificationTier;
+    if (status) where.status = status;
+    if (tier) where.qualificationTier = tier;
+    if (source) where.source = source;
+    if (companyId) where.companyId = companyId;
+    if (calculatorSlug) {
+      where.assessments = {
+        some: {
+          deletedAt: null,
+          calculatorVersion: {
+            calculator: { slug: calculatorSlug },
+          },
+        },
+      };
     }
 
     if (search) {
@@ -380,7 +452,11 @@ export class DashboardService {
         orderBy: { createdAt: 'desc' },
         include: {
           company: true,
+          assignedAdmin: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
           assessments: {
+            where: { deletedAt: null },
             take: 1,
             orderBy: { createdAt: 'desc' },
             include: {
@@ -389,6 +465,12 @@ export class DashboardService {
                 include: { calculator: true },
               },
             },
+          },
+          followUps: {
+            where: { status: { in: ['PENDING', 'RESCHEDULED'] } },
+            orderBy: { dueAt: 'asc' },
+            take: 1,
+            select: { dueAt: true },
           },
         },
       }),
@@ -404,13 +486,21 @@ export class DashboardService {
         jobTitle: lead.jobTitle,
         phone: lead.phone,
         status: lead.status,
+        source: lead.source,
+        hasOverdueFollowUp: Boolean(
+          lead.followUps[0] && lead.followUps[0].dueAt < new Date(),
+        ),
         qualificationTier: lead.qualificationTier,
-        company: lead.company ? { id: lead.company.id, name: lead.company.name } : null,
+        assignedAdmin: lead.assignedAdmin,
+        company: lead.company
+          ? { id: lead.company.id, name: lead.company.name }
+          : null,
         latestAssessment: lead.assessments[0]
           ? {
               id: lead.assessments[0].id,
-              calculator: lead.assessments[0].calculatorVersion?.calculator?.name,
-              score: lead.assessments[0].result?.overallScore || null,
+              calculator:
+                lead.assessments[0].calculatorVersion?.calculator?.name,
+              score: lead.assessments[0].result?.overallScore ?? null,
               completedAt: lead.assessments[0].completedAt,
             }
           : null,
@@ -438,20 +528,6 @@ export class DashboardService {
   }
 
   /**
-   * Resolves third-party service status from IntegrationLog table.
-   */
-  private resolveServiceStatus(service: string, logs: { serviceName: string; status: string; createdAt: Date }[]) {
-    const log = logs.find((l) => l.serviceName.toUpperCase() === service.toUpperCase());
-    if (!log) {
-      return { status: 'NOT_CONFIGURED', lastSync: null };
-    }
-    return {
-      status: log.status,
-      lastSync: log.createdAt.toISOString(),
-    };
-  }
-
-  /**
    * Generates genuine monthly buckets for time-series charts.
    */
   private async calculateMonthlyTrend() {
@@ -460,8 +536,19 @@ export class DashboardService {
 
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-      const label = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+      const end = new Date(
+        d.getFullYear(),
+        d.getMonth() + 1,
+        0,
+        23,
+        59,
+        59,
+        999,
+      );
+      const label = d.toLocaleString('en-US', {
+        month: 'short',
+        year: 'numeric',
+      });
       months.push({ label, start: d, end });
     }
 
@@ -507,7 +594,9 @@ export class DashboardService {
     const now = new Date();
     switch (timeframe) {
       case 'today':
-        return { gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()) };
+        return {
+          gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()),
+        };
       case 'last_7_days': {
         const d = new Date(now);
         d.setDate(d.getDate() - 7);

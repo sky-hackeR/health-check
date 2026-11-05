@@ -1,4 +1,7 @@
-import { RecommendationService, RecommendationRuleSnapshot } from './recommendation.service';
+import {
+  RecommendationService,
+  RecommendationRuleSnapshot,
+} from './recommendation.service';
 import { RecommendationPriority, RecommendationStatus } from '@prisma/client';
 import { ScoringCalculationResult } from '../scoring/interfaces/scoring.interfaces';
 
@@ -49,7 +52,11 @@ describe('RecommendationService (Recommendation Engine)', () => {
       {
         id: 'rule-comp',
         templateId: 'tmpl-comp',
-        scoreCategory: { id: 'cat-comp', code: 'COMPLIANCE', name: 'Compliance' },
+        scoreCategory: {
+          id: 'cat-comp',
+          code: 'COMPLIANCE',
+          name: 'Compliance',
+        },
         maxScore: 50.0, // 30.0 <= 50.0 -> TRIGGERS
         template: {
           id: 'tmpl-comp',
@@ -77,7 +84,11 @@ describe('RecommendationService (Recommendation Engine)', () => {
       },
     ];
 
-    const results = service.evaluateRecommendations(rules, mockScoringResult, []);
+    const results = service.evaluateRecommendations(
+      rules,
+      mockScoringResult,
+      [],
+    );
 
     expect(results).toHaveLength(1);
     expect(results[0].title).toBe('Immediate Compliance Audit Required');
@@ -107,15 +118,31 @@ describe('RecommendationService (Recommendation Engine)', () => {
     ];
 
     // Case 1: Answer matches condition
-    const matchingResults = service.evaluateRecommendations(rules, mockScoringResult, [
-      { questionId: 'q-audit', questionCode: 'Q_AUDIT', selectedOptionValue: 'over_2_years' },
-    ]);
+    const matchingResults = service.evaluateRecommendations(
+      rules,
+      mockScoringResult,
+      [
+        {
+          questionId: 'q-audit',
+          questionCode: 'Q_AUDIT',
+          selectedOptionValue: 'over_2_years',
+        },
+      ],
+    );
     expect(matchingResults).toHaveLength(1);
 
     // Case 2: Answer does NOT match condition
-    const nonMatchingResults = service.evaluateRecommendations(rules, mockScoringResult, [
-      { questionId: 'q-audit', questionCode: 'Q_AUDIT', selectedOptionValue: '12_months' },
-    ]);
+    const nonMatchingResults = service.evaluateRecommendations(
+      rules,
+      mockScoringResult,
+      [
+        {
+          questionId: 'q-audit',
+          questionCode: 'Q_AUDIT',
+          selectedOptionValue: '12_months',
+        },
+      ],
+    );
     expect(nonMatchingResults).toHaveLength(0);
   });
 
@@ -149,7 +176,11 @@ describe('RecommendationService (Recommendation Engine)', () => {
       },
     ];
 
-    const results = service.evaluateRecommendations(rules, mockScoringResult, []);
+    const results = service.evaluateRecommendations(
+      rules,
+      mockScoringResult,
+      [],
+    );
 
     expect(results).toHaveLength(1);
     expect(results[0].priority).toBe(RecommendationPriority.CRITICAL);
@@ -212,12 +243,50 @@ describe('RecommendationService (Recommendation Engine)', () => {
       },
     ];
 
-    const results = service.evaluateRecommendations(rules, mockScoringResult, []);
+    const results = service.evaluateRecommendations(
+      rules,
+      mockScoringResult,
+      [],
+    );
 
     expect(results).toHaveLength(4);
     expect(results[0].priority).toBe(RecommendationPriority.CRITICAL);
     expect(results[1].priority).toBe(RecommendationPriority.HIGH);
     expect(results[2].priority).toBe(RecommendationPriority.MEDIUM);
     expect(results[3].priority).toBe(RecommendationPriority.LOW);
+  });
+
+  it('renders supported template placeholders from the engine scoring result', () => {
+    const results = service.evaluateRecommendations(
+      [
+        {
+          id: 'rule-comp',
+          templateId: 'tmpl-comp',
+          scoreCategoryId: 'cat-comp',
+          scoreCategory: {
+            id: 'cat-comp',
+            code: 'COMPLIANCE',
+            name: 'Compliance',
+          },
+          template: {
+            id: 'tmpl-comp',
+            code: 'REC_SCORE_CONTEXT',
+            title: '{{categoryName}} score: {{score}}',
+            summary: 'Risk is {{riskLevel}}; maturity is {{maturityLevel}}.',
+            actionPlan:
+              '{{answeredQuestionsCount}} of {{visibleQuestionsCount}} items answered.',
+            priority: RecommendationPriority.HIGH,
+          },
+        },
+      ],
+      mockScoringResult,
+      [],
+    );
+
+    expect(results[0]).toMatchObject({
+      title: 'Compliance score: 30.0',
+      summary: 'Risk is CRITICAL; maturity is Emerging.',
+      actionPlan: '1 of 1 items answered.',
+    });
   });
 });

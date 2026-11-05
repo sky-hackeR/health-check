@@ -7,6 +7,74 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model CompanyPainPoint {
+  id                String                 @id @default(uuid())
+  code              String
+  versionGroupId    String                 @default(uuid())
+  versionNumber     Int                    @default(1)
+  title             String
+  description       String
+  businessImpact    String
+  calculatorSlug    String
+  detectionRule     Json
+  category          String
+  priority          RecommendationPriority @default(MEDIUM)
+  suggestedSolution String?
+  isActive          Boolean                @default(true)
+  publishedAt       DateTime?
+  findings          AssessmentPainPoint[]
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@unique([versionGroupId, versionNumber])
+  @@index([calculatorSlug, isActive, publishedAt])
+  @@index([code])
+  @@map("company_pain_points")
+}
+
+model AssessmentPainPoint {
+  id                 String                 @id @default(uuid())
+  assessmentId       String
+  assessment         Assessment             @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  companyPainPointId String
+  companyPainPoint   CompanyPainPoint       @relation(fields: [companyPainPointId], references: [id], onDelete: Restrict)
+  code               String
+  title              String
+  description        String
+  businessImpact     String
+  calculatorSlug     String
+  category           String
+  priority           RecommendationPriority
+  suggestedSolution  String?
+  triggeredAnswers   Json
+  detectedAt         DateTime               @default(now())
+
+  @@unique([assessmentId, companyPainPointId])
+  @@index([assessmentId])
+  @@index([code])
+  @@map("assessment_pain_points")
+}
+
+model ColdEmailTemplate {
+  id                            String                  @id @default(uuid())
+  versionGroupId                String                  @default(uuid())
+  versionNumber                 Int                     @default(1)
+  name                          String
+  subject                       String
+  body                          String
+  description                   String?
+  internalNotes                 String?
+  applicablePainPointCategories String[]                @default([])
+  status                        ColdEmailTemplateStatus @default(DRAFT)
+  publishedAt                   DateTime?
+  createdAt                     DateTime                @default(now())
+  updatedAt                     DateTime                @updatedAt
+
+  @@unique([versionGroupId, versionNumber])
+  @@index([status, updatedAt])
+  @@map("cold_email_templates")
+}
+
 // ==============================================================================
 // ENUMS
 // ==============================================================================
@@ -16,7 +84,20 @@ enum LeadStatus {
   CONTACTED
   QUALIFIED
   UNQUALIFIED
+  FOLLOW_UP
+  WALKTHROUGH_SCHEDULED
   CONVERTED
+  DISQUALIFIED
+  LOST
+  ARCHIVED
+}
+
+enum LeadSource {
+  WEBSITE
+  CALCULATOR
+  CAMPAIGN
+  REFERRAL
+  OTHER
 }
 
 enum LeadQualificationTier {
@@ -54,6 +135,12 @@ enum RecommendationStatus {
   IMPLEMENTED
 }
 
+enum ColdEmailTemplateStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
 enum WalkthroughStatus {
   PENDING
   SCHEDULED
@@ -68,6 +155,31 @@ enum LeadActivityType {
   EMAIL_DISPATCHED
   STATUS_CHANGED
   NOTE_ADDED
+  CALL_RECORDED
+  EMAIL_RECORDED
+  MEETING_RECORDED
+  FOLLOW_UP_CREATED
+  FOLLOW_UP_COMPLETED
+  FOLLOW_UP_RESCHEDULED
+  FOLLOW_UP_CANCELLED
+  WALKTHROUGH_SCHEDULED
+  WALKTHROUGH_RESCHEDULED
+  WALKTHROUGH_COMPLETED
+  WALKTHROUGH_CANCELLED
+}
+
+enum FollowUpStatus {
+  PENDING
+  COMPLETED
+  RESCHEDULED
+  CANCELLED
+}
+
+enum FollowUpMethod {
+  CALL
+  EMAIL
+  MEETING
+  OTHER
 }
 
 enum NotificationChannel {
@@ -87,23 +199,53 @@ enum NotificationStatus {
 // ==============================================================================
 
 model AdminUser {
-  id           String     @id @default(uuid())
-  email        String     @unique
-  passwordHash String
-  firstName    String
-  lastName     String
-  isActive     Boolean    @default(true)
-  lastLoginAt  DateTime?
-  roleId       String
-  role         Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  auditLogs    AuditLog[]
-  deletedAt    DateTime?
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  id                String         @id @default(uuid())
+  email             String         @unique
+  passwordHash      String
+  firstName         String
+  lastName          String
+  isActive          Boolean        @default(true)
+  lastLoginAt       DateTime?
+  roleId            String
+  role              Role           @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  auditLogs         AuditLog[]
+  sessions          AdminSession[]
+  leadActivities    LeadActivity[]
+  assignedLeads     Lead[]         @relation("LeadAssignee")
+  createdFollowUps  FollowUp[]
+  assignedFollowUps FollowUp[]     @relation("FollowUpAssignee")
+  deletedAt         DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
   @@index([roleId])
   @@index([deletedAt])
   @@map("admin_users")
+}
+
+model AdminSession {
+  id          String    @id @default(uuid())
+  tokenHash   String    @unique
+  adminUserId String
+  adminUser   AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([adminUserId])
+  @@index([expiresAt])
+  @@map("admin_sessions")
+}
+
+model AdminLoginThrottle {
+  keyHash         String    @id
+  failedAttempts  Int       @default(0)
+  windowStartedAt DateTime  @default(now())
+  blockedUntil    DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@index([updatedAt])
+  @@map("admin_login_throttles")
 }
 
 model Role {
@@ -152,9 +294,9 @@ model Company {
   id             String    @id @default(uuid())
   name           String
   normalizedName String    @unique // Canonical name format (e.g. lowercase trimmed) to prevent duplicate records
-  domain         String?   // Corporate domain (e.g. acme.com)
+  domain         String? // Corporate domain (e.g. acme.com)
   industry       String?
-  headcountRange String?   // e.g. "1-20", "21-50", "51-200", "201-1000", "1000+"
+  headcountRange String? // e.g. "1-20", "21-50", "51-200", "201-1000", "1000+"
   country        String?
   city           String?
   website        String?
@@ -169,35 +311,41 @@ model Company {
 }
 
 model Lead {
-  id                  String                @id @default(uuid())
-  companyId           String?
-  company             Company?              @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  email               String                @unique
-  firstName           String?
-  lastName            String?
-  jobTitle            String?
-  phone               String?
-  status              LeadStatus            @default(NEW)
-  qualificationTier   LeadQualificationTier @default(UNGRADED)
-  
+  id                String                @id @default(uuid())
+  companyId         String?
+  company           Company?              @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  email             String                @unique
+  firstName         String?
+  lastName          String?
+  jobTitle          String?
+  phone             String?
+  status            LeadStatus            @default(NEW)
+  source            LeadSource            @default(WEBSITE)
+  assignedAdminId   String?
+  assignedAdmin     AdminUser?            @relation("LeadAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  qualificationTier LeadQualificationTier @default(UNGRADED)
+
   // Consent & Compliance Records
-  consentGdpr         Boolean               @default(false)
-  consentMarketing    Boolean               @default(false)
-  consentAt           DateTime?
-  consentIp           String?
+  consentGdpr      Boolean   @default(false)
+  consentMarketing Boolean   @default(false)
+  consentAt        DateTime?
+  consentIp        String?
 
   assessments         Assessment[]
   activities          LeadActivity[]
   walkthroughRequests WalkthroughRequest[]
+  followUps           FollowUp[]
   trackingEvents      TrackingEvent[]
 
-  deletedAt           DateTime?
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([companyId])
   @@index([status])
   @@index([qualificationTier])
+  @@index([source])
+  @@index([assignedAdminId])
   @@index([deletedAt])
   @@map("leads")
 }
@@ -243,17 +391,17 @@ model CalculatorVersion {
 }
 
 model ScoreCategory {
-  id                  String            @id @default(uuid())
+  id                  String               @id @default(uuid())
   calculatorVersionId String
-  calculatorVersion   CalculatorVersion @relation(fields: [calculatorVersionId], references: [id], onDelete: Cascade)
-  code                String            // e.g. "COMPLIANCE", "RETENTION", "TALENT_ACQUISITION"
+  calculatorVersion   CalculatorVersion    @relation(fields: [calculatorVersionId], references: [id], onDelete: Cascade)
+  code                String // e.g. "COMPLIANCE", "RETENTION", "TALENT_ACQUISITION"
   name                String
-  weight              Float             @default(1.0)
+  weight              Float                @default(1.0)
   questions           Question[]
   scoringRules        ScoringRule[]
   recommendationRules RecommendationRule[]
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 
   @@unique([calculatorVersionId, code])
   @@index([calculatorVersionId])
@@ -266,14 +414,18 @@ model Question {
   calculatorVersion   CalculatorVersion  @relation(fields: [calculatorVersionId], references: [id], onDelete: Cascade)
   scoreCategoryId     String?
   scoreCategory       ScoreCategory?     @relation(fields: [scoreCategoryId], references: [id], onDelete: SetNull)
-  code                String             // e.g. "Q1_COMPLIANCE_AUDIT"
+  code                String // e.g. "Q1_COMPLIANCE_AUDIT"
   title               String
   helpText            String?
   type                QuestionType       @default(SINGLE_CHOICE)
   orderIndex          Int                @default(0)
   weight              Float              @default(1.0)
   isRequired          Boolean            @default(true)
-  displayConditions   Json?              // Conditional visibility rule tree
+  isActive            Boolean            @default(true)
+  calculationKey      String?
+  validationRules     Json?
+  defaultValue        Json?
+  displayConditions   Json? // Conditional visibility rule tree
   options             QuestionOption[]
   answers             AssessmentAnswer[]
   createdAt           DateTime           @default(now())
@@ -309,7 +461,7 @@ model ScoringRule {
   scoreCategoryId     String?
   scoreCategory       ScoreCategory?    @relation(fields: [scoreCategoryId], references: [id], onDelete: SetNull)
   name                String
-  conditionExpression String            // JSON rule or DSL formula expression
+  conditionExpression String // JSON rule or DSL formula expression
   multiplier          Float             @default(1.0)
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
@@ -326,6 +478,10 @@ model ScoringRule {
 model RecommendationTemplate {
   id                        String                     @id @default(uuid())
   code                      String                     @unique // e.g. "REC_AUTOMATE_ONBOARDING"
+  versionGroupId            String                     @default(uuid())
+  versionNumber             Int                        @default(1)
+  isPublished               Boolean                    @default(true)
+  publishedAt               DateTime?
   title                     String
   summary                   String
   actionPlan                String
@@ -336,6 +492,8 @@ model RecommendationTemplate {
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt
 
+  @@unique([versionGroupId, versionNumber])
+  @@index([versionGroupId, isPublished])
   @@map("recommendation_templates")
 }
 
@@ -365,29 +523,30 @@ model RecommendationRule {
 // ==============================================================================
 
 model Assessment {
-  id                  String                     @id @default(uuid())
-  sessionToken        String                     @unique // Anonymous session support prior to lead capture
+  id                  String            @id @default(uuid())
+  sessionToken        String            @unique // Anonymous session support prior to lead capture
   calculatorVersionId String
-  calculatorVersion   CalculatorVersion          @relation(fields: [calculatorVersionId], references: [id], onDelete: Restrict)
-  leadId              String?                    // Nullable: allows anonymous exploration before submission
-  lead                Lead?                      @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  status              AssessmentStatus           @default(IN_PROGRESS)
-  startedAt           DateTime                   @default(now())
+  calculatorVersion   CalculatorVersion @relation(fields: [calculatorVersionId], references: [id], onDelete: Restrict)
+  leadId              String? // Nullable: allows anonymous exploration before submission
+  lead                Lead?             @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  status              AssessmentStatus  @default(IN_PROGRESS)
+  startedAt           DateTime          @default(now())
   completedAt         DateTime?
   ipAddress           String?
   userAgent           String?
   campaignId          String?
-  campaign            Campaign?                  @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  expiresAt           DateTime?                  // Session expiration timestamp (e.g. 30 days)
+  campaign            Campaign?         @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  expiresAt           DateTime? // Session expiration timestamp (e.g. 30 days)
 
-  answers             AssessmentAnswer[]
-  result              AssessmentResult?
-  recommendations     AssessmentRecommendation[]
-  trackingEvents      TrackingEvent[]
+  answers           AssessmentAnswer[]
+  result            AssessmentResult?
+  recommendations   AssessmentRecommendation[]
+  painPointFindings AssessmentPainPoint[]
+  trackingEvents    TrackingEvent[]
 
-  deletedAt           DateTime?
-  createdAt           DateTime                   @default(now())
-  updatedAt           DateTime                   @updatedAt
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([calculatorVersionId])
   @@index([leadId])
@@ -422,11 +581,11 @@ model AssessmentResult {
   id                String     @id @default(uuid())
   assessmentId      String     @unique
   assessment        Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
-  overallScore      Float
-  normalizedIndex   Float      // 0.0 - 100.0% index
-  maturityLevel     String     // e.g. "Foundational", "Emerging", "Optimized", "Strategic"
-  categoryScores    Json       // Category breakdown snapshot: { "COMPLIANCE": 80, "RETENTION": 45 }
-  calculatedMetrics Json?      // Concrete ROI metrics: { "annualTurnoverCost": 120000, "projectedSavings": 42000 }
+  overallScore      Float?
+  normalizedIndex   Float? // 0.0 - 100.0% index for scored assessments
+  maturityLevel     String? // e.g. "Foundational", "Emerging", "Optimized", "Strategic"
+  categoryScores    Json // Category breakdown snapshot: { "COMPLIANCE": 80, "RETENTION": 45 }
+  calculatedMetrics Json? // Concrete ROI metrics: { "annualTurnoverCost": 120000, "projectedSavings": 42000 }
   summaryHtml       String?
   isImmutable       Boolean    @default(true)
   calculatedAt      DateTime   @default(now())
@@ -444,14 +603,14 @@ model AssessmentRecommendation {
   template     RecommendationTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
   ruleId       String?
   rule         RecommendationRule?    @relation(fields: [ruleId], references: [id], onDelete: SetNull)
-  
+
   // Historical snapshot preserved at recommendation generation time
-  title        String
-  summary      String
-  actionPlan   String
-  priority     RecommendationPriority
-  status       RecommendationStatus   @default(PROPOSED)
-  createdAt    DateTime               @default(now())
+  title      String
+  summary    String
+  actionPlan String
+  priority   RecommendationPriority
+  status     RecommendationStatus   @default(PROPOSED)
+  createdAt  DateTime               @default(now())
 
   @@index([assessmentId])
   @@index([templateId])
@@ -484,10 +643,10 @@ model Campaign {
   id           String         @id @default(uuid())
   code         String         @unique // e.g. "LINKEDIN_Q4_HR_AUDIT", "GOOGLE_SEARCH_TURNOVER"
   name         String
-  source       String?        // utm_source
-  medium       String?        // utm_medium
-  term         String?        // utm_term
-  content      String?        // utm_content
+  source       String? // utm_source
+  medium       String? // utm_medium
+  term         String? // utm_term
+  content      String? // utm_content
   assessments  Assessment[]
   leadActivity LeadActivity[]
   createdAt    DateTime       @default(now())
@@ -498,11 +657,11 @@ model Campaign {
 
 model TrackingEvent {
   id            String       @id @default(uuid())
-  visitorToken  String       // Independent tracking token
-  eventType     String       // e.g. "PAGE_VIEW", "CALCULATOR_STARTED", "LEAD_FORM_SUBMITTED"
-  leadId        String?      // Nullable: independent of lead creation
+  visitorToken  String // Independent tracking token
+  eventType     String // e.g. "PAGE_VIEW", "CALCULATOR_STARTED", "LEAD_FORM_SUBMITTED"
+  leadId        String? // Nullable: independent of lead creation
   lead          Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  assessmentId  String?      // Nullable: tracking may happen before or outside assessment
+  assessmentId  String? // Nullable: tracking may happen before or outside assessment
   assessment    Assessment?  @relation(fields: [assessmentId], references: [id], onDelete: SetNull)
   pageUrl       String?
   metadata      Json?
@@ -523,7 +682,9 @@ model WalkthroughRequest {
   leadId        String
   lead          Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
   preferredDate DateTime?
+  scheduledAt   DateTime?
   notes         String?
+  outcome       String?
   status        WalkthroughStatus @default(PENDING)
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
@@ -534,20 +695,46 @@ model WalkthroughRequest {
 }
 
 model LeadActivity {
-  id          String           @id @default(uuid())
-  leadId      String
-  lead        Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  type        LeadActivityType
-  description String
-  metadata    Json?
-  campaignId  String?
-  campaign    Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  createdAt   DateTime         @default(now())
+  id           String           @id @default(uuid())
+  leadId       String
+  lead         Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  actorAdminId String?
+  actorAdmin   AdminUser?       @relation(fields: [actorAdminId], references: [id], onDelete: SetNull)
+  type         LeadActivityType
+  description  String
+  metadata     Json?
+  campaignId   String?
+  campaign     Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  createdAt    DateTime         @default(now())
 
-  @@index([leadId])
+  @@index([leadId, createdAt])
   @@index([type])
+  @@index([actorAdminId])
   @@index([campaignId])
   @@map("lead_activities")
+}
+
+model FollowUp {
+  id               String         @id @default(uuid())
+  leadId           String
+  lead             Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdByAdminId String
+  createdByAdmin   AdminUser      @relation(fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  assignedAdminId  String?
+  assignedAdmin    AdminUser?     @relation("FollowUpAssignee", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+  dueAt            DateTime
+  method           FollowUpMethod
+  notes            String
+  status           FollowUpStatus @default(PENDING)
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([leadId, dueAt])
+  @@index([status, dueAt])
+  @@index([assignedAdminId, status])
+  @@map("follow_ups")
 }
 
 // ==============================================================================
@@ -556,10 +743,10 @@ model LeadActivity {
 
 model IntegrationLog {
   id              String   @id @default(uuid())
-  serviceName     String   // e.g. "HUBSPOT", "SENDGRID", "SLACK", "WEBHOOK"
-  direction       String   // "OUTBOUND" | "INBOUND"
+  serviceName     String // e.g. "HUBSPOT", "SENDGRID", "SLACK", "WEBHOOK"
+  direction       String // "OUTBOUND" | "INBOUND"
   endpoint        String?
-  status          String   // "SUCCESS" | "FAILED" | "PENDING"
+  status          String // "SUCCESS" | "FAILED" | "PENDING"
   requestPayload  Json?
   responsePayload Json?
   errorMessage    String?
@@ -574,7 +761,7 @@ model AuditLog {
   id          String     @id @default(uuid())
   adminUserId String?
   adminUser   AdminUser? @relation(fields: [adminUserId], references: [id], onDelete: SetNull)
-  action      String     // e.g. "ADMIN_LOGIN", "UPDATE_CALCULATOR_VERSION", "EXPORT_LEADS"
+  action      String // e.g. "ADMIN_LOGIN", "UPDATE_CALCULATOR_VERSION", "EXPORT_LEADS"
   resource    String
   resourceId  String?
   ipAddress   String?
@@ -588,7 +775,7 @@ model AuditLog {
 
 model Notification {
   id        String              @id @default(uuid())
-  recipient String              // Destination address or user identifier
+  recipient String // Destination address or user identifier
   channel   NotificationChannel @default(EMAIL)
   subject   String
   content   String

@@ -63,17 +63,39 @@ export class AssessmentResultResponseDto {
   @ApiProperty({ example: 'a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0' })
   sessionToken: string;
 
-  @ApiProperty({ example: 85.0 })
-  overallScore: number;
+  @ApiProperty({
+    enum: [
+      'HR_HEALTH_CHECK',
+      'PAYROLL_COST_ESTIMATE',
+      'PAYROLL_COMPLIANCE_EVIDENCE',
+      'HR_ADMINISTRATIVE_COST_ESTIMATE',
+    ],
+  })
+  resultType:
+    | 'HR_HEALTH_CHECK'
+    | 'PAYROLL_COST_ESTIMATE'
+    | 'PAYROLL_COMPLIANCE_EVIDENCE'
+    | 'HR_ADMINISTRATIVE_COST_ESTIMATE';
 
-  @ApiProperty({ example: 85.0 })
-  normalizedIndex: number;
+  @ApiProperty({ example: 85.0, nullable: true })
+  overallScore: number | null;
 
-  @ApiProperty({ example: 'Optimized', enum: ['Foundational', 'Emerging', 'Advancing', 'Optimized'] })
-  maturityLevel: string;
+  @ApiProperty({ example: 85.0, nullable: true })
+  normalizedIndex: number | null;
 
-  @ApiProperty({ example: 'LOW', enum: ['LOW', 'MODERATE', 'HIGH', 'CRITICAL'] })
-  riskLevel: string;
+  @ApiProperty({
+    example: 'Optimized',
+    enum: ['Foundational', 'Emerging', 'Advancing', 'Optimized'],
+    nullable: true,
+  })
+  maturityLevel: string | null;
+
+  @ApiProperty({
+    example: 'LOW',
+    enum: ['LOW', 'MODERATE', 'HIGH', 'CRITICAL'],
+    nullable: true,
+  })
+  riskLevel: string | null;
 
   @ApiProperty({
     description: 'Category score breakdown indexed by category code',
@@ -83,6 +105,9 @@ export class AssessmentResultResponseDto {
 
   @ApiProperty({ type: BenchmarkComparisonDto })
   benchmark: BenchmarkComparisonDto;
+
+  @ApiPropertyOptional({ type: Object, nullable: true })
+  calculatedMetrics: Record<string, unknown> | null;
 
   @ApiProperty({ example: true })
   isImmutable: boolean;

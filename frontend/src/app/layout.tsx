@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "GoSwiftHR Intelligence | HR Assessment & Calculator Platform",
-  description: "Enterprise HR intelligence, workforce assessment, and ROI calculator powered by GoSwiftHR.",
+  title: "GoSwiftHR | HR Assessment & Calculator Platform",
+  description: "GoSwiftHR workforce assessments, submission insights, and administrator tools.",
 };
 
 export default function RootLayout({

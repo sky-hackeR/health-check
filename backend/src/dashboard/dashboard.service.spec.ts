@@ -34,6 +34,7 @@ describe('DashboardService (Database Aggregation)', () => {
     expect(typeof data.metrics.qualifiedLeads).toBe('number');
     expect(typeof data.metrics.completedAssessments).toBe('number');
     expect(typeof data.metrics.abandonedAssessments).toBe('number');
+    expect(typeof data.metrics.inProgressAssessments).toBe('number');
     expect(typeof data.metrics.completionRate).toBe('number');
     expect(typeof data.metrics.leadConversionRate).toBe('number');
     expect(data.metrics.conversionRateDescription).toBeDefined();
@@ -46,6 +47,9 @@ describe('DashboardService (Database Aggregation)', () => {
     expect(Array.isArray(data.followUps)).toBe(true);
     expect(data.integrationStatus).toBeDefined();
     expect(data.integrationStatus.database.status).toBe('CONNECTED');
+    expect(data.integrationStatus.hubspot.status).toBe('NOT_IMPLEMENTED');
+    expect(data.integrationStatus.sendgrid.status).toBe('NOT_IMPLEMENTED');
+    expect(data.integrationStatus.webhook.status).toBe('NOT_IMPLEMENTED');
   });
 
   it('should handle pagination and return total count on getLeads', async () => {

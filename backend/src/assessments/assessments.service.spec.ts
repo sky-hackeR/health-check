@@ -1,5 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
+import { RecommendationService } from '../recommendations/recommendation.service';
+import { ScoringService } from '../scoring/scoring.service';
+import { CalculatorMetricsService } from './calculator-metrics.service';
 import { AssessmentsService } from './assessments.service';
 import { NotFoundException, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { AssessmentStatus, QuestionType } from '@prisma/client';
@@ -10,7 +13,13 @@ describe('AssessmentsService (Integration & Engine Tests)', () => {
 
   beforeAll(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [AssessmentsService, PrismaService],
+      providers: [
+        AssessmentsService,
+        PrismaService,
+        ScoringService,
+        RecommendationService,
+        CalculatorMetricsService,
+      ],
     }).compile();
 
     service = module.get<AssessmentsService>(AssessmentsService);

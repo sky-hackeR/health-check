@@ -18,9 +18,9 @@ import {
   ShieldCheck,
   Clock,
   Activity,
-  Sliders,
-  Lightbulb,
-  FileText,
+  BrainCircuit,
+  AlertTriangle,
+  Mail,
   BarChart3,
   Globe2,
   Filter,
@@ -94,9 +94,11 @@ export const navGroups: NavGroup[] = [
     id: 'intelligence',
     title: 'Intelligence',
     items: [
-      { label: 'Scoring Rules', href: '/control-panel/intelligence/scoring-rules', icon: Sliders },
-      { label: 'Recommendations', href: '/control-panel/intelligence/recommendations', icon: Lightbulb },
-      { label: 'Recommendation Templates', href: '/control-panel/intelligence/templates', icon: FileText },
+      { label: 'Intelligence Overview', href: '/control-panel/intelligence', icon: Sparkles },
+      { label: 'Scoring & Assessment', href: '/control-panel/intelligence/scoring-rules', icon: Activity },
+      { label: 'Company Pain Points', href: '/control-panel/intelligence/pain-points', icon: AlertTriangle },
+      { label: 'Email Templates', href: '/control-panel/intelligence/cold-emails', icon: Mail },
+      { label: 'How Intelligence Works', href: '/control-panel/intelligence/how-it-works', icon: BrainCircuit },
     ],
   },
   {
@@ -104,22 +106,22 @@ export const navGroups: NavGroup[] = [
     title: 'Analytics',
     items: [
       { label: 'Overview', href: '/control-panel/analytics/overview', icon: BarChart3 },
-      { label: 'Geographic Analytics', href: '/control-panel/analytics/geography', icon: Globe2 },
+      // { label: 'Geographic Analytics', href: '/control-panel/analytics/geography', icon: Globe2 },
       { label: 'Conversion Funnel', href: '/control-panel/analytics/funnel', icon: Filter },
-      { label: 'Campaign Performance', href: '/control-panel/analytics/campaigns', icon: Megaphone },
+      // { label: 'Campaign Performance', href: '/control-panel/analytics/campaigns', icon: Megaphone },
     ],
   },
-  {
-    id: 'system',
-    title: 'System',
-    items: [
-      { label: 'Administrators', href: '/control-panel/system/admins', icon: Shield },
-      { label: 'Roles & Permissions', href: '/control-panel/system/roles', icon: KeyRound },
-      { label: 'Integrations', href: '/control-panel/system/integrations', icon: Layers },
-      { label: 'Audit Logs', href: '/control-panel/system/audit-logs', icon: History },
-      { label: 'Settings', href: '/control-panel/system/settings', icon: Settings },
-    ],
-  },
+  // {
+  //   id: 'system',
+  //   title: 'System',
+  //   items: [
+  //     { label: 'Administrators', href: '/control-panel/system/admins', icon: Shield },
+  //     { label: 'Roles & Permissions', href: '/control-panel/system/roles', icon: KeyRound },
+  //     { label: 'Integrations', href: '/control-panel/system/integrations', icon: Layers },
+  //     { label: 'Audit Logs', href: '/control-panel/system/audit-logs', icon: History },
+  //     { label: 'Settings', href: '/control-panel/system/settings', icon: Settings },
+  //   ],
+  // },
 ];
 
 export interface SidebarNavigationProps {
@@ -156,30 +158,26 @@ export const SidebarNavigation: React.FC<SidebarNavigationProps> = ({
         <Link
           href="/control-panel"
           onClick={onCloseMobile}
-          className="flex items-center gap-3 overflow-hidden group"
+          className="flex items-center gap-3 overflow-hidden group focus:outline-none"
         >
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#5157FB] to-[#6878FF] flex items-center justify-center shrink-0 shadow-[0_2px_10px_rgba(81,87,251,0.4)] group-hover:scale-105 transition-transform">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#5157FB] to-[#757BFF] flex items-center justify-center shrink-0 shadow-lg shadow-[#5157FB]/25 group-hover:scale-105 transition-transform">
             <Sparkles className="w-5 h-5 text-white" />
           </div>
           {!isCollapsed && (
             <div className="flex flex-col truncate">
-              <span className="text-base font-extrabold tracking-tight text-white leading-tight">
-                GoSwift<span className="text-[#6878FF] font-black">HR</span>
+              <span className="font-heading font-black tracking-tight text-white text-base leading-tight">
+                GoSwift<span className="text-[#5157FB]">HR</span>
               </span>
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
+              <span className="text-[10px] font-medium tracking-wider uppercase text-slate-400">
                 Intelligence OS
               </span>
             </div>
           )}
         </Link>
-
-        {/* Desktop Collapse Toggle */}
         <button
-          type="button"
           onClick={onToggleCollapse}
-          className="hidden md:flex p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+          className="hidden lg:flex w-7 h-7 items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition-colors focus:outline-none"
           title={isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
-          aria-label={isCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
         >
           {isCollapsed ? (
             <PanelLeftOpen className="w-4 h-4" />

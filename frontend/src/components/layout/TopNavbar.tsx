@@ -13,10 +13,9 @@ import {
   History,
   LogOut,
   ExternalLink,
-  Check,
-  Sparkles,
 } from 'lucide-react';
 import { navGroups } from './SidebarNavigation';
+import { useAdminAuth } from '@/components/auth/AdminAuthProvider';
 
 export interface TopNavbarProps {
   onOpenMobileMenu: () => void;
@@ -24,26 +23,15 @@ export interface TopNavbarProps {
   onOpenSignOutDialog: () => void;
 }
 
-interface NotificationItem {
-  id: string;
-  title: string;
-  description: string;
-  time: string;
-  unread: boolean;
-  type: 'lead' | 'assessment' | 'system';
-}
-
-const emptyNotifications: NotificationItem[] = [];
-
 export const TopNavbar: React.FC<TopNavbarProps> = ({
   onOpenMobileMenu,
   onOpenSearchModal,
   onOpenSignOutDialog,
 }) => {
   const pathname = usePathname();
+  const { admin } = useAdminAuth();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(emptyNotifications);
 
   const profileRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -61,12 +49,6 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const unreadCount = notifications.filter((n) => n.unread).length;
-
-  const markAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })));
-  };
 
   // Find active label for breadcrumb
   let activeLabel = 'Dashboard';
@@ -110,7 +92,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
         >
           <div className="flex items-center gap-2 truncate">
             <Search className="w-4 h-4 text-goswift-primary shrink-0" />
-            <span className="truncate">Search leads, calculators, rules...</span>
+            <span className="truncate">Search navigation...</span>
           </div>
           <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono font-medium text-goswift-grey-subtle bg-white border border-goswift-grey-muted rounded shadow-2xs">
             ⌘K
@@ -138,12 +120,10 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
             type="button"
             onClick={() => setIsNotifOpen(!isNotifOpen)}
             className="relative p-2 rounded-lg text-goswift-grey-subtle hover:text-goswift-navy hover:bg-goswift-grey-light transition-colors"
-            title="Notifications"
+            title="Notifications are not available yet"
+            aria-label="Notifications (not available yet)"
           >
             <Bell className="w-5 h-5" />
-            {unreadCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-goswift-primary ring-2 ring-white" />
-            )}
           </button>
 
           {isNotifOpen && (
@@ -151,60 +131,13 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
               <div className="px-4 py-3 bg-goswift-grey-light/60 border-b border-goswift-grey-muted flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <h4 className="text-sm font-bold text-goswift-navy">Notifications</h4>
-                  {unreadCount > 0 && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#EEF0FF] text-goswift-primary">
-                      {unreadCount} new
-                    </span>
-                  )}
                 </div>
-                {unreadCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={markAllRead}
-                    className="text-xs text-goswift-primary hover:underline font-medium"
-                  >
-                    Mark all read
-                  </button>
-                )}
               </div>
 
-              <div className="divide-y divide-goswift-grey-muted/60 max-h-80 overflow-y-auto">
-                {notifications.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-goswift-grey-subtle">
-                    No unread notifications at this time.
-                  </div>
-                ) : (
-                  notifications.map((n) => (
-                    <div
-                      key={n.id}
-                      className={`p-3.5 hover:bg-goswift-grey-light/50 transition-colors text-left flex gap-3 ${
-                        n.unread ? 'bg-[#EEF0FF]/40' : ''
-                      }`}
-                    >
-                      <div
-                        className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
-                          n.unread ? 'bg-goswift-primary' : 'bg-transparent'
-                        }`}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-goswift-navy leading-tight">{n.title}</p>
-                        <p className="text-xs text-goswift-grey-subtle mt-0.5 leading-relaxed">{n.description}</p>
-                        <span className="text-[10px] text-goswift-grey-subtle/80 mt-1.5 inline-block">{n.time}</span>
-                      </div>
-                    </div>
-                  ))
-                )}
+              <div className="p-6 text-center text-xs leading-5 text-goswift-grey-subtle">
+                Live administrator notifications are not available yet. No notification feed is connected.
               </div>
 
-              <div className="p-2.5 bg-goswift-grey-light/40 border-t border-goswift-grey-muted text-center">
-                <Link
-                  href="/control-panel/system/audit-logs"
-                  onClick={() => setIsNotifOpen(false)}
-                  className="text-xs font-semibold text-goswift-primary hover:underline"
-                >
-                  View System Audit Trail &rarr;
-                </Link>
-              </div>
             </div>
           )}
         </div>
@@ -217,11 +150,17 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
             className="flex items-center gap-2 p-1.5 rounded-xl hover:bg-goswift-grey-light border border-transparent hover:border-goswift-grey-muted transition-all"
           >
             <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#5157FB] to-[#6878FF] text-white font-bold text-xs flex items-center justify-center ring-2 ring-[#5157FB]/20">
-              SA
+              {admin
+                ? `${admin.firstName.charAt(0)}${admin.lastName.charAt(0)}`
+                : 'AD'}
             </div>
             <div className="hidden sm:block text-left text-xs">
-              <p className="font-bold text-goswift-navy leading-tight">Admin</p>
-              <p className="text-[10px] text-goswift-grey-subtle">Super Admin</p>
+              <p className="font-bold text-goswift-navy leading-tight">
+                {admin ? `${admin.firstName} ${admin.lastName}` : 'Administrator'}
+              </p>
+              <p className="text-[10px] text-goswift-grey-subtle">
+                {admin?.role.replace(/_/g, ' ') || 'Admin'}
+              </p>
             </div>
             <ChevronDown className="w-3.5 h-3.5 text-goswift-grey-subtle ml-0.5" />
           </button>
@@ -229,11 +168,15 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           {isProfileOpen && (
             <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-white border border-goswift-grey-muted shadow-xl ring-1 ring-black/5 z-50 py-1.5 animate-in fade-in zoom-in-95 duration-150">
               <div className="px-4 py-3 border-b border-goswift-grey-muted/60">
-                <p className="text-sm font-bold text-goswift-navy">System Administrator</p>
-                <p className="text-xs text-goswift-grey-subtle truncate">admin@goswifthr.com</p>
+                <p className="text-sm font-bold text-goswift-navy">
+                  {admin ? `${admin.firstName} ${admin.lastName}` : 'Administrator'}
+                </p>
+                <p className="text-xs text-goswift-grey-subtle truncate">
+                  {admin?.email}
+                </p>
                 <span className="inline-flex items-center gap-1 mt-2 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Active Session
+                  {admin?.role.replace(/_/g, ' ') || 'Signed in'}
                 </span>
               </div>
 
@@ -244,7 +187,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                   className="w-full text-left px-4 py-2 text-xs text-goswift-navy hover:bg-goswift-grey-light flex items-center gap-2.5 transition-colors"
                 >
                   <User className="w-3.5 h-3.5 text-goswift-grey-subtle" />
-                  <span>Admin Profiles</span>
+                  <span>Administrators</span>
                 </Link>
                 <Link
                   href="/control-panel/system/roles"

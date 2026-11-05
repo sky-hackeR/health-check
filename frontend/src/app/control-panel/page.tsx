@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import {
   Users,
   UserCheck,
@@ -17,7 +18,6 @@ import {
   Zap,
   Mail,
   RefreshCw,
-  AlertTriangle,
 } from 'lucide-react';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { MetricCard } from '@/components/ui/MetricCard';
@@ -45,10 +45,10 @@ export default function ControlPanelDashboard() {
   const [healthStatus, setHealthStatus] = useState<'idle' | 'checking' | 'healthy' | 'error'>('idle');
   const [healthLatency, setHealthLatency] = useState<number | null>(null);
 
-  // Load real database metrics
   const loadDashboardData = useCallback(async () => {
     setIsLoading(true);
     setError(null);
+    setData(null);
     try {
       const response = await fetchDashboardData(dateRange);
       setData(response);
@@ -60,10 +60,10 @@ export default function ControlPanelDashboard() {
   }, [dateRange]);
 
   useEffect(() => {
-    loadDashboardData();
+    const timer = window.setTimeout(() => void loadDashboardData(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadDashboardData]);
 
-  // Live backend health ping
   const handleTestBackendHealth = async () => {
     setHealthStatus('checking');
     try {
@@ -83,31 +83,33 @@ export default function ControlPanelDashboard() {
     if (!data) return;
     setIsExporting(true);
     try {
-      const csvContent =
-        'data:text/csv;charset=utf-8,' +
-        [
-          ['Name', 'Email', 'Company', 'Calculator', 'Score', 'Tier', 'Status', 'Date'].join(','),
-          ...data.recentLeads.map((l) =>
-            [
-              `"${l.name}"`,
-              `"${l.email}"`,
-              `"${l.company}"`,
-              `"${l.calculator}"`,
-              l.score !== null ? l.score : '',
-              l.tier,
-              l.status,
-              `"${l.date}"`,
-            ].join(',')
-          ),
-        ].join('\n');
-
-      const encodedUri = encodeURI(csvContent);
+      const csvContent = [
+        ['Name', 'Email', 'Company', 'Calculator', 'Score', 'Tier', 'Status', 'Date'].join(','),
+        ...data.recentLeads.map((l) =>
+          [
+            l.name,
+            l.email,
+            l.company,
+            l.calculator,
+            l.score !== null ? l.score : '',
+            l.tier,
+            l.status,
+            l.date,
+          ]
+            .map((value) => `"${String(value).replace(/"/g, '""')}"`)
+            .join(',')
+        ),
+      ].join('\n');
+      const downloadUrl = URL.createObjectURL(
+        new Blob([csvContent], { type: 'text/csv;charset=utf-8' }),
+      );
       const link = document.createElement('a');
-      link.setAttribute('href', encodedUri);
-      link.setAttribute('download', `goswifthr-leads-${dateRange}.csv`);
+      link.setAttribute('href', downloadUrl);
+      link.setAttribute('download', 'goswifthr-recent-leads.csv');
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      URL.revokeObjectURL(downloadUrl);
     } finally {
       setIsExporting(false);
       setShowExportModal(false);
@@ -118,7 +120,6 @@ export default function ControlPanelDashboard() {
     {
       key: 'name',
       header: 'Lead Name & Company',
-      sortable: true,
       render: (lead) => (
         <div>
           <p className="font-semibold text-goswift-navy">{lead.name}</p>
@@ -132,7 +133,6 @@ export default function ControlPanelDashboard() {
     {
       key: 'calculator',
       header: 'Calculator Taken',
-      sortable: true,
       render: (lead) => (
         <span className="text-xs font-medium text-goswift-navy bg-goswift-grey-light px-2.5 py-1 rounded-md border border-goswift-grey-muted">
           {lead.calculator}
@@ -142,7 +142,6 @@ export default function ControlPanelDashboard() {
     {
       key: 'score',
       header: 'Health Score',
-      sortable: true,
       render: (lead) => {
         if (lead.score === null) {
           return <span className="text-xs text-goswift-grey-subtle italic">Pending evaluation</span>;
@@ -165,13 +164,11 @@ export default function ControlPanelDashboard() {
     {
       key: 'tier',
       header: 'Qualification',
-      sortable: true,
       render: (lead) => <StatusBadge status={lead.tier} size="sm" />,
     },
     {
       key: 'status',
       header: 'Status',
-      sortable: true,
       render: (lead) => <StatusBadge status={lead.status} size="sm" />,
     },
     {
@@ -195,10 +192,10 @@ export default function ControlPanelDashboard() {
       {/* Page Header */}
       <PageHeader
         title="Intelligence Dashboard"
-        subtitle="Real-time pulse on workforce assessments, qualified enterprise leads, and ROI calculator engagement."
+        subtitle="A current view of assessment activity, captured leads and calculator engagement."
         badge={
           <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-[#EEF0FF] text-[#5157FB] border border-[#5157FB]/20">
-            PostgreSQL Live
+            Live data
           </span>
         }
         actions={
@@ -221,7 +218,7 @@ export default function ControlPanelDashboard() {
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold bg-white border border-goswift-grey-muted rounded-lg text-goswift-navy hover:bg-goswift-grey-light hover:border-slate-300 disabled:opacity-50 disabled:pointer-events-none transition-colors shadow-2xs"
             >
               <Download className="w-4 h-4 text-goswift-grey-subtle" />
-              <span>Export CSV</span>
+              <span>Export recent leads (up to 5)</span>
             </button>
           </div>
         }
@@ -233,7 +230,7 @@ export default function ControlPanelDashboard() {
           <div className="flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
             <div>
-              <p className="font-bold">Unable to load live dashboard data</p>
+              <p className="font-bold">Dashboard information is unavailable</p>
               <p className="text-xs text-rose-700 mt-0.5">{error}</p>
             </div>
           </div>
@@ -262,11 +259,11 @@ export default function ControlPanelDashboard() {
         </div>
       )}
 
-      {/* Live Database Data */}
+      {/* Dashboard data */}
       {data && (
         <>
-          {/* 6 Core Metric Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          {/* Core lead and assessment lifecycle metrics */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             <MetricCard
               title="Total Leads"
               value={data.metrics.totalLeads.toLocaleString()}
@@ -286,12 +283,20 @@ export default function ControlPanelDashboard() {
               iconTextColor="text-emerald-600"
             />
             <MetricCard
-              title="Completions"
+              title="Completed assessments"
               value={data.metrics.completedAssessments.toLocaleString()}
               timeframe={`${data.metrics.completionRate}% completion`}
               icon={CheckCircle2}
               iconBgColor="bg-indigo-50"
               iconTextColor="text-goswift-primary"
+            />
+            <MetricCard
+              title="In progress"
+              value={data.metrics.inProgressAssessments.toLocaleString()}
+              timeframe="not yet completed"
+              icon={Clock}
+              iconBgColor="bg-sky-50"
+              iconTextColor="text-sky-600"
             />
             <MetricCard
               title="Abandonment Rate"
@@ -327,7 +332,7 @@ export default function ControlPanelDashboard() {
                 <div>
                   <h3 className="text-base font-bold text-goswift-navy">Monthly Assessment & Lead Velocity</h3>
                   <p className="text-xs text-goswift-grey-subtle mt-0.5">
-                    Real-time monthly volume derived from PostgreSQL timestamp records
+                    Monthly assessment and lead activity
                   </p>
                 </div>
                 <div className="flex items-center gap-4 text-xs">
@@ -453,7 +458,7 @@ export default function ControlPanelDashboard() {
             <div className="bg-white rounded-xl border border-goswift-grey-muted p-5 sm:p-6 shadow-xs">
               <h3 className="text-base font-bold text-goswift-navy mb-1">Lead Pipeline Distribution</h3>
               <p className="text-xs text-goswift-grey-subtle mb-4">
-                Real status breakdown from PostgreSQL leads table
+                Lead status breakdown
               </p>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
@@ -494,7 +499,7 @@ export default function ControlPanelDashboard() {
 
                 {data.geographicDistribution.length === 0 ? (
                   <div className="p-6 text-center text-xs text-goswift-grey-subtle border border-dashed border-goswift-grey-muted rounded-lg">
-                    No geographic entries recorded in database yet.
+                    Location insights will appear when submissions include enough location information.
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -526,24 +531,24 @@ export default function ControlPanelDashboard() {
               <div>
                 <h3 className="text-lg font-bold text-goswift-navy">Recent Inbound Leads</h3>
                 <p className="text-xs text-goswift-grey-subtle">
-                  Live submissions retrieved from the database
+                  Most recent captured leads
                 </p>
               </div>
-              <a
+              <Link
                 href="/control-panel/leads"
                 className="text-xs font-semibold text-goswift-primary hover:underline inline-flex items-center gap-1"
               >
                 <span>View All Leads ({data.metrics.totalLeads})</span>
                 <ArrowRight className="w-3.5 h-3.5" />
-              </a>
+              </Link>
             </div>
 
             <DataTable
               columns={columns}
               data={data.recentLeads}
               keyExtractor={(item) => item.id}
-              emptyTitle="No leads in database"
-              emptyDescription="No leads have submitted the assessment form yet. Submissions will appear here live."
+              emptyTitle="No leads have been captured yet"
+              emptyDescription="Leads will appear here after someone submits an available assessment."
             />
           </div>
 
@@ -553,7 +558,7 @@ export default function ControlPanelDashboard() {
             <div className="bg-white rounded-xl border border-goswift-grey-muted p-5 shadow-xs">
               <h4 className="text-sm font-bold text-goswift-navy mb-4 flex items-center justify-between">
                 <span>Recent System Activity</span>
-                <span className="text-[10px] font-semibold text-goswift-primary uppercase">Database Stream</span>
+                <span className="text-[10px] font-semibold text-goswift-primary uppercase">Recent activity</span>
               </h4>
 
               {data.recentActivities.length === 0 ? (
@@ -580,20 +585,17 @@ export default function ControlPanelDashboard() {
               )}
             </div>
 
-            {/* Outstanding Follow-ups Queue */}
+            {/* Pending Walkthrough Requests */}
             <div className="bg-white rounded-xl border border-goswift-grey-muted p-5 shadow-xs flex flex-col justify-between">
               <div>
                 <h4 className="text-sm font-bold text-goswift-navy mb-4 flex items-center justify-between">
-                  <span>Outstanding Follow-ups</span>
-                  <span className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">
-                    {data.followUps.length} Pending
-                  </span>
+                  <span>Pending Walkthrough Requests</span>
                 </h4>
 
                 {data.followUps.length === 0 ? (
                   <EmptyState
-                    title="All follow-ups complete"
-                    description="No pending walkthrough requests or consultation tasks in queue."
+                    title="No pending walkthrough requests"
+                    description="New consultation requests will appear here after submission."
                     className="p-4"
                   />
                 ) : (
@@ -620,12 +622,12 @@ export default function ControlPanelDashboard() {
               </div>
 
               <div className="pt-3 mt-3 border-t border-goswift-grey-muted text-center">
-                <a
-                  href="/control-panel/leads/follow-ups"
+                <Link
+                  href="/control-panel/leads/walkthroughs"
                   className="text-xs font-semibold text-goswift-primary hover:underline"
                 >
-                  Open Follow-up Queue &rarr;
-                </a>
+                  View walkthrough requests &rarr;
+                </Link>
               </div>
             </div>
 
@@ -639,10 +641,10 @@ export default function ControlPanelDashboard() {
                     onClick={handleTestBackendHealth}
                     disabled={healthStatus === 'checking'}
                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#5157FB] hover:text-[#4243DA] bg-[#EEF0FF] px-2 py-1 rounded-md border border-[#5157FB]/20 hover:bg-[#E0E4FF] transition-colors"
-                    title="Ping Backend API"
+                    title="Check platform availability"
                   >
                     <Zap className={`w-3 h-3 ${healthStatus === 'checking' ? 'animate-spin' : ''}`} />
-                    <span>{healthStatus === 'checking' ? 'Testing...' : 'Test Health Ping'}</span>
+                    <span>{healthStatus === 'checking' ? 'Checking...' : 'Check service status'}</span>
                   </button>
                 </div>
 
@@ -650,7 +652,7 @@ export default function ControlPanelDashboard() {
                   <div className="mb-3 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center justify-between">
                     <span className="flex items-center gap-1.5 font-medium">
                       <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                      API is Live on Port 3001
+                      Platform service available
                     </span>
                     <span className="font-mono text-[10px] bg-white px-1.5 py-0.5 rounded border border-emerald-200">
                       {healthLatency}ms
@@ -661,7 +663,7 @@ export default function ControlPanelDashboard() {
                 {healthStatus === 'error' && (
                   <div className="mb-3 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-1.5">
                     <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                    <span>Backend offline or unreachable on port 3001.</span>
+                    <span>Platform service is temporarily unavailable. Please try again.</span>
                   </div>
                 )}
 
@@ -669,51 +671,56 @@ export default function ControlPanelDashboard() {
                   <div className="flex items-center justify-between text-xs py-1 border-b border-slate-100">
                     <div className="flex items-center gap-2">
                       <Database className="w-4 h-4 text-goswift-primary" />
-                      <span className="font-semibold text-goswift-navy">PostgreSQL Database</span>
+                      <span className="font-semibold text-goswift-navy">Business data service</span>
                     </div>
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      {data.integrationStatus.database.status} (
-                      {data.integrationStatus.database.latencyMs !== null
-                        ? `${data.integrationStatus.database.latencyMs}ms`
-                        : 'offline'}
-                      )
+                      <StatusBadge
+                        status={data.integrationStatus.database.status}
+                        label={
+                          data.integrationStatus.database.status === 'CONNECTED'
+                            ? 'Available'
+                            : 'Needs attention'
+                        }
+                      />
+                      {data.integrationStatus.database.latencyMs !== null &&
+                        ` ${data.integrationStatus.database.latencyMs}ms`}
                     </span>
                   </div>
 
                   <div className="flex items-center justify-between text-xs py-1 border-b border-slate-100">
                     <div className="flex items-center gap-2">
                       <Zap className="w-4 h-4 text-blue-600" />
-                      <span className="font-semibold text-goswift-navy">HubSpot CRM Sync</span>
+                      <span className="font-semibold text-goswift-navy">CRM connection</span>
                     </div>
-                    <StatusBadge status={data.integrationStatus.hubspot.status} size="sm" />
+                    <StatusBadge status={data.integrationStatus.hubspot.status} label="Not available yet" size="sm" />
                   </div>
 
                   <div className="flex items-center justify-between text-xs py-1 border-b border-slate-100">
                     <div className="flex items-center gap-2">
                       <Mail className="w-4 h-4 text-purple-600" />
-                      <span className="font-semibold text-goswift-navy">SendGrid Transactional</span>
+                      <span className="font-semibold text-goswift-navy">Email delivery</span>
                     </div>
-                    <StatusBadge status={data.integrationStatus.sendgrid.status} size="sm" />
+                    <StatusBadge status={data.integrationStatus.sendgrid.status} label="Not available yet" size="sm" />
                   </div>
 
                   <div className="flex items-center justify-between text-xs py-1">
                     <div className="flex items-center gap-2">
                       <RefreshCw className="w-4 h-4 text-amber-600" />
-                      <span className="font-semibold text-goswift-navy">Webhook Relay</span>
+                      <span className="font-semibold text-goswift-navy">External notifications</span>
                     </div>
-                    <StatusBadge status={data.integrationStatus.webhook.status} size="sm" />
+                    <StatusBadge status={data.integrationStatus.webhook.status} label="Not available yet" size="sm" />
                   </div>
                 </div>
               </div>
 
               <div className="pt-3 mt-3 border-t border-goswift-grey-muted text-center">
-                <a
+                <Link
                   href="/control-panel/system/integrations"
                   className="text-xs font-semibold text-goswift-primary hover:underline"
                 >
-                  Configure Integrations &rarr;
-                </a>
+                  View integration availability &rarr;
+                </Link>
               </div>
             </div>
           </div>
@@ -725,9 +732,9 @@ export default function ControlPanelDashboard() {
         isOpen={showExportModal}
         onClose={() => setShowExportModal(false)}
         onConfirm={handleExportData}
-        title="Export Intelligence Data"
-        description={`Export live lead records and assessment status as a formatted CSV spreadsheet.`}
-        confirmLabel="Download CSV"
+        title="Export recent leads"
+        description="Download a CSV containing up to five most recent leads shown in the dashboard. Use the Leads page for filtered records."
+        confirmLabel="Download recent CSV"
         cancelLabel="Cancel"
         variant="primary"
         isLoading={isExporting}

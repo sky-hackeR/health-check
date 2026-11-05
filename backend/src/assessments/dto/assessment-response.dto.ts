@@ -53,6 +53,12 @@ export class AssessmentQuestionDto {
   @ApiPropertyOptional()
   displayConditions?: any;
 
+  @ApiPropertyOptional()
+  validationRules?: any;
+
+  @ApiPropertyOptional()
+  defaultValue?: any;
+
   @ApiProperty({ type: [PublicOptionDto] })
   options: PublicOptionDto[];
 }
@@ -129,6 +135,12 @@ export class AssessmentStateResponseDto {
 
   @ApiProperty({ enum: AssessmentStatus, example: AssessmentStatus.IN_PROGRESS })
   status: AssessmentStatus;
+
+  @ApiProperty({
+    description: 'Whether this assessment has been associated with a submitted lead email',
+    example: false,
+  })
+  leadAssociated: boolean;
 
   @ApiProperty({
     example: {

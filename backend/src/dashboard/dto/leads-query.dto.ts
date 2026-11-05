@@ -1,6 +1,16 @@
-import { IsOptional, IsString, IsInt, Min, Max } from 'class-validator';
+import {
+  IsDateString,
+  IsOptional,
+  IsString,
+  IsInt,
+  Min,
+  Max,
+  IsEnum,
+  IsUUID,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { LeadSource, LeadStatus, LeadQualificationTier } from '@prisma/client';
 
 export class LeadsQueryDto {
   @ApiPropertyOptional({ default: 1, minimum: 1 })
@@ -18,28 +28,53 @@ export class LeadsQueryDto {
   @Max(100)
   limit: number = 10;
 
-  @ApiPropertyOptional({ description: 'Search by lead name, email, or company name' })
+  @ApiPropertyOptional({
+    description: 'Search by lead name, email, or company name',
+  })
   @IsOptional()
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Filter by lead status (e.g. NEW, CONTACTED, QUALIFIED)' })
+  @ApiPropertyOptional({
+    description: 'Filter by lead status (e.g. NEW, CONTACTED, QUALIFIED)',
+  })
   @IsOptional()
-  @IsString()
-  status?: string;
+  @IsEnum(LeadStatus)
+  status?: LeadStatus;
 
-  @ApiPropertyOptional({ description: 'Filter by qualification tier (e.g. HOT, WARM, COLD)' })
+  @ApiPropertyOptional({
+    description: 'Filter by qualification tier (e.g. HOT, WARM, COLD)',
+  })
   @IsOptional()
-  @IsString()
-  tier?: string;
+  @IsEnum(LeadQualificationTier)
+  tier?: LeadQualificationTier;
 
-  @ApiPropertyOptional({ description: 'Filter created on or after this ISO date' })
+  @ApiPropertyOptional({ description: 'Filter by lead source' })
+  @IsOptional()
+  @IsEnum(LeadSource)
+  source?: LeadSource;
+
+  @ApiPropertyOptional({ description: 'Filter by associated company ID' })
+  @IsOptional()
+  @IsUUID()
+  companyId?: string;
+
+  @ApiPropertyOptional({ description: 'Filter by calculator slug' })
   @IsOptional()
   @IsString()
+  calculatorSlug?: string;
+
+  @ApiPropertyOptional({
+    description: 'Filter created on or after this ISO date',
+  })
+  @IsOptional()
+  @IsDateString()
   from?: string;
 
-  @ApiPropertyOptional({ description: 'Filter created on or before this ISO date' })
+  @ApiPropertyOptional({
+    description: 'Filter created on or before this ISO date',
+  })
   @IsOptional()
-  @IsString()
+  @IsDateString()
   to?: string;
 }

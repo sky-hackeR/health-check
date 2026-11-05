@@ -37,17 +37,25 @@ describe('PrismaService & Database Integration', () => {
       },
     });
 
-    expect(calculators.length).toBe(4);
-
-    const slugs = calculators.map((c) => c.slug).sort();
-    expect(slugs).toEqual([
+    const productCalculatorSlugs = [
       'compliance-risk-assessment',
       'hr-health-check',
       'hr-tech-roi-calculator',
       'turnover-retention-calculator',
-    ]);
+    ];
+    const productCalculators = calculators.filter((calculator) =>
+      productCalculatorSlugs.includes(calculator.slug),
+    );
 
-    for (const calc of calculators) {
+    // The database can contain additional internal calculators. This assertion
+    // verifies the original four seeded calculators without treating those
+    // additional records as an error.
+    expect(productCalculators).toHaveLength(productCalculatorSlugs.length);
+    expect(productCalculators.map((c) => c.slug).sort()).toEqual(
+      productCalculatorSlugs.sort(),
+    );
+
+    for (const calc of productCalculators) {
       expect(calc.versions.length).toBeGreaterThanOrEqual(1);
       const v1 = calc.versions.find((v) => v.versionNumber === 1);
       expect(v1).toBeDefined();

@@ -30,6 +30,7 @@ export type DisplayConditionRule = ConditionGroup | SingleCondition;
 export interface AnswerSnapshot {
   questionId: string;
   questionCode: string;
+  calculationKey?: string | null;
   selectedOptionValue?: string | null;
   selectedOptionId?: string | null;
   textValue?: string | null;

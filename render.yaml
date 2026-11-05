@@ -1,0 +1,29 @@
+services:
+  # 1. The NestJS Backend Service
+  - type: web
+    name: nest-backend
+    runtime: node
+    plan: starter
+    rootDir: apps/backend # Point to your NestJS folder
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+  # 2. The Next.js Frontend Service
+  - type: web
+    name: next-frontend
+    runtime: node
+    plan: starter
+    rootDir: apps/frontend # Point to your Next.js folder
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          name: nest-backend
+          type: web
+          property: host

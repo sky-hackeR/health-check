@@ -1,7 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { isIP } from 'node:net';
 import { AppModule } from './app.module';
+import { getAllowedOrigins } from './auth/auth-origin';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -9,13 +11,30 @@ async function bootstrap() {
 
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
   const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const nodeEnv = process.env.NODE_ENV || 'development';
+  const allowedOrigins = getAllowedOrigins(frontendUrl, nodeEnv);
+  const trustedProxyIps = (process.env.TRUSTED_PROXY_IPS || '')
+    .split(',')
+    .map((ip) => ip.trim())
+    .filter(Boolean);
+
+  if (trustedProxyIps.some((ip) => !isIP(ip))) {
+    throw new Error(
+      'TRUSTED_PROXY_IPS must contain only comma-separated IP addresses.',
+    );
+  }
 
   // Global API Prefix
   app.setGlobalPrefix('api/v1');
 
+  // Forwarded client addresses are trusted only from explicitly configured proxies.
+  if (trustedProxyIps.length > 0) {
+    app.getHttpAdapter().getInstance().set('trust proxy', trustedProxyIps);
+  }
+
   // CORS configuration
   app.enableCors({
-    origin: [frontendUrl, 'http://localhost:3000'],
+    origin: [...allowedOrigins],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -38,16 +57,10 @@ async function bootstrap() {
     )
     .setVersion('1.0.0')
     .addTag('Health', 'System health check and diagnostic endpoints')
-    .addBearerAuth(
-      {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        name: 'Authorization',
-        description: 'Enter JWT bearer token',
-        in: 'header',
-      },
-      'bearer-jwt',
+    .addCookieAuth(
+      'goswifthr_admin_session',
+      { type: 'apiKey', in: 'cookie' },
+      'admin-session',
     )
     .build();
 
